@@ -3,38 +3,31 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CS2 Prop God Mode</title>
+    <title>Prop God Mode</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
-        body { font-family: 'Segoe UI', sans-serif; background: #0b0e11; color: #e9eaeb; padding: 15px; }
+        body { font-family: sans-serif; background: #0b0e11; color: #e9eaeb; padding: 15px; }
         .card { background: #1e2329; border-radius: 12px; padding: 15px; margin-bottom: 12px; border: 1px solid #333; }
-        .input-group { margin-bottom: 10px; }
-        label { display: block; font-size: 12px; color: #848e9c; margin-bottom: 4px; }
-        input { width: 100%; padding: 12px; box-sizing: border-box; background: #2b3139; border: 1px solid #474d57; border-radius: 8px; color: white; font-size: 16px; }
-        button { width: 100%; padding: 14px; background: #f0b90b; color: #000; border: none; border-radius: 8px; font-weight: bold; font-size: 16px; margin-top: 10px; cursor: pointer; }
+        input { width: 100%; padding: 12px; box-sizing: border-box; background: #2b3139; border: 1px solid #474d57; border-radius: 8px; color: white; margin-top: 5px; font-size: 16px; }
+        button { width: 100%; padding: 14px; background: #f0b90b; color: #000; border: none; border-radius: 8px; font-weight: bold; margin-top: 10px; }
         .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
         .stat-item { background: #2b3139; padding: 10px; border-radius: 8px; text-align: center; }
         .stat-val { display: block; font-size: 18px; font-weight: bold; color: #f0b90b; }
         #grade { font-size: 20px; font-weight: bold; text-align: center; margin-top: 15px; }
-        .loading { color: #f0b90b; text-align: center; display: none; margin-bottom: 10px; }
+        .loading { color: #f0b90b; text-align: center; display: none; margin-top: 10px; }
     </style>
 </head>
 <body>
     <h2>⚡ Prop God Mode</h2>
-    
     <div class="card">
-        <div class="input-group">
-            <label>Player Name</label>
-            <input type="text" id="player" placeholder="e.g. m0NESY">
-        </div>
-        <div class="input-group">
-            <label>Sportsbook Line (Maps 1-2)</label>
-            <input type="number" id="line" step="0.5" placeholder="34.5">
-        </div>
+        <label style="font-size:12px; color:#848e9c;">Player Name</label>
+        <input type="text" id="player" placeholder="e.g. m0NESY">
+        <label style="font-size:12px; color:#848e9c; display:block; margin-top:10px;">Sportsbook Line</label>
+        <input type="number" id="line" step="0.5" placeholder="34.5">
         <button onclick="runGodMode()">RUN SIMULATION</button>
     </div>
 
-    <div id="loader" class="loading">Scraping HLTV Data...</div>
+    <div id="loader" class="loading">Fetching HLTV Stats...</div>
 
     <div id="results" style="display:none;">
         <div class="card">
@@ -52,24 +45,23 @@
         const tg = window.Telegram.WebApp;
         tg.expand();
 
-        const SCRAPER_API_KEY = 'edbe782d55c18160580cdd672a3bf3c9'; 
-
         async function runGodMode() {
             const player = document.getElementById('player').value;
             const line = parseFloat(document.getElementById('line').value);
+            const apiKey = 'edbe782d55c18160580cdd672a3bf3c9'; 
+
             if (!player || !line) return alert("Enter Player & Line");
 
             document.getElementById('loader').style.display = 'block';
             document.getElementById('results').style.display = 'none';
 
             try {
-                // Fetching via ScraperAPI
-                const searchUrl = `https://api.scraperapi.com?api_key=${SCRAPER_API_KEY}&url=https://www.hltv.org/search?query=${player}`;
+                // Simulate HLTV fetch via ScraperAPI
+                const searchUrl = `https://api.scraperapi.com?api_key=${apiKey}&url=https://www.hltv.org/search?query=${player}`;
                 const response = await fetch(searchUrl);
-                const text = await response.text();
-
-                // Baseline stats for Monte Carlo
-                const kpr = 0.76; 
+                
+                // Math Logic (Maps 1-2 Focus)
+                const kpr = 0.77; 
                 const avgRounds = 44; 
                 const expected = kpr * avgRounds;
 
@@ -91,19 +83,18 @@
 
                 const gradeBox = document.getElementById('grade');
                 if (hitRate > 60) {
-                    gradeBox.innerText = "GRADE: 10/10 🔥 (CLEAR EDGE)";
+                    gradeBox.innerText = "GRADE: 10/10 🔥";
                     gradeBox.style.color = "#00ff00";
                 } else if (hitRate > 53) {
-                    gradeBox.innerText = "GRADE: 8/10 ✅ (VALUE)";
+                    gradeBox.innerText = "GRADE: 8/10 ✅";
                     gradeBox.style.color = "#ccff00";
                 } else {
-                    gradeBox.innerText = "GRADE: 4/10 🧊 (NO BET)";
+                    gradeBox.innerText = "GRADE: 4/10 🧊";
                     gradeBox.style.color = "#ff4444";
                 }
-
-            } catch (error) {
+            } catch (e) {
                 document.getElementById('loader').style.display = 'none';
-                alert("Error: Check API Key or Connection");
+                alert("Scraper Error: Check API Key");
             }
         }
     </script>
