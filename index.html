@@ -8,10 +8,12 @@
     <style>
         body { font-family: sans-serif; background: #0f0f0f; color: #ffffff; padding: 20px; }
         .card { background: #1a1a1a; border-radius: 12px; padding: 15px; margin-bottom: 15px; border: 1px solid #333; }
-        .grade-10 { color: #00ff00; font-weight: bold; } /* Elite Edge */
         .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-        input, button { width: 100%; padding: 12px; margin-top: 10px; border-radius: 8px; border: none; }
-        button { background: #2481cc; color: white; font-weight: bold; }
+        input, button { width: 100%; padding: 12px; box-sizing: border-box; margin-top: 10px; border-radius: 8px; border: none; font-size: 16px; }
+        input { background: #2a2a2a; color: white; border: 1px solid #444; }
+        button { background: #2481cc; color: white; font-weight: bold; cursor: pointer; }
+        #grade { font-size: 1.2em; margin-top: 10px; font-weight: bold; }
+        h2 { margin-bottom: 20px; border-left: 4px solid #2481cc; padding-left: 10px; }
     </style>
 </head>
 <body>
@@ -25,31 +27,60 @@
 
     <div id="results" style="display:none;">
         <div class="card">
-            <h3 id="display-name">---</h3>
+            <h3 id="display-name" style="margin-top:0; color:#2481cc;">---</h3>
             <div class="stat-grid">
-                <div>Avg: <span id="avg">0</span></div>
-                <div>Median: <span id="med">0</span></div>
+                <div>Proj Kills: <span id="avg">0</span></div>
                 <div>Hit Rate: <span id="hit">0%</span></div>
                 <div>Edge: <span id="edge">0%</span></div>
             </div>
-        </div>
-        
-        <div class="card">
-            <h4>Final Recommendation</h4>
-            <p id="recommendation">Waiting for simulation...</p>
-            <div id="grade" class="grade-10">Grade: -/10</div>
+            <div id="grade">Grade: -/10</div>
         </div>
     </div>
 
     <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand(); 
+
         function runSim() {
-            // This is a placeholder for your script logic
+            const player = document.getElementById('player').value;
+            if (!player) return alert("Please enter a player name");
+
+            // --- Simulation Logic ---
+            // Manual baseline for now (Maps 1-2)
+            const line = 34.5; 
+            const kpr = 0.77; 
+            const rounds = 46; 
+            const expected = kpr * rounds;
+
+            // Monte Carlo: 100,000 simulations
+            let overCount = 0;
+            for (let i = 0; i < 100000; i++) {
+                // Simulating round volatility
+                let simResult = expected + (Math.random() - 0.5) * 14; 
+                if (simResult > line) overCount++;
+            }
+
+            const hitPercent = (overCount / 1000).toFixed(1);
+            const edgePercent = (hitPercent - 50).toFixed(1);
+
+            // --- Update UI ---
             document.getElementById('results').style.display = 'block';
-            document.getElementById('display-name').innerText = document.getElementById('player').value;
-            document.getElementById('avg').innerText = '34.2';
-            document.getElementById('edge').innerText = '12.4%';
-            document.getElementById('grade').innerText = 'Grade: 9/10';
-            document.getElementById('recommendation').innerText = 'High edge vs line. Role advantage confirmed on Ancient/Mirage.';
+            document.getElementById('display-name').innerText = player.toUpperCase();
+            document.getElementById('avg').innerText = expected.toFixed(1);
+            document.getElementById('hit').innerText = hitPercent + "%";
+            document.getElementById('edge').innerText = edgePercent + "%";
+            
+            const gradeText = document.getElementById('grade');
+            if (hitPercent > 58) {
+                gradeText.innerText = "Grade: 10/10 🔥 (MISPRICED)";
+                gradeText.style.color = "#00ff00";
+            } else if (hitPercent > 53) {
+                gradeText.innerText = "Grade: 8/10 ✅ (STRONG PLAY)";
+                gradeText.style.color = "#ccff00";
+            } else {
+                gradeText.innerText = "Grade: 5/10 🧊 (NO BET)";
+                gradeText.style.color = "#ff4444";
+            }
         }
     </script>
 </body>
