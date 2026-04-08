@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CS2 Prop Grader</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body { font-family: sans-serif; background: #0f0f0f; color: #ffffff; padding: 20px; }
+        .card { background: #1a1a1a; border-radius: 12px; padding: 15px; margin-bottom: 15px; border: 1px solid #333; }
+        .grade-10 { color: #00ff00; font-weight: bold; } /* Elite Edge */
+        .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        input, button { width: 100%; padding: 12px; margin-top: 10px; border-radius: 8px; border: none; }
+        button { background: #2481cc; color: white; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h2>📊 Prop Workspace</h2>
+    
+    <div class="card">
+        <label>Player Name</label>
+        <input type="text" id="player" placeholder="e.g. m0NESY">
+        <button onclick="runSim()">Analyze Prop</button>
+    </div>
+
+    <div id="results" style="display:none;">
+        <div class="card">
+            <h3 id="display-name">---</h3>
+            <div class="stat-grid">
+                <div>Avg: <span id="avg">0</span></div>
+                <div>Median: <span id="med">0</span></div>
+                <div>Hit Rate: <span id="hit">0%</span></div>
+                <div>Edge: <span id="edge">0%</span></div>
+            </div>
+        </div>
+        
+        <div class="card">
+            <h4>Final Recommendation</h4>
+            <p id="recommendation">Waiting for simulation...</p>
+            <div id="grade" class="grade-10">Grade: -/10</div>
+        </div>
+    </div>
+
+    <script>
+        function runSim() {
+            // This is a placeholder for your script logic
+            document.getElementById('results').style.display = 'block';
+            document.getElementById('display-name').innerText = document.getElementById('player').value;
+            document.getElementById('avg').innerText = '34.2';
+            document.getElementById('edge').innerText = '12.4%';
+            document.getElementById('grade').innerText = 'Grade: 9/10';
+            document.getElementById('recommendation').innerText = 'High edge vs line. Role advantage confirmed on Ancient/Mirage.';
+        }
+    </script>
+</body>
+</html>
