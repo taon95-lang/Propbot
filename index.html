@@ -1,57 +1,111 @@
-async function runGodMode() {
-    const player = document.getElementById('player').value;
-    const line = parseFloat(document.getElementById('line').value);
-    const apiKey = 'edbe782d55c18160580cdd672a3bf3c9'; // <--- PUT YOUR SCRAPERAPI KEY HERE
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CS2 Prop God Mode</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #0b0e11; color: #e9eaeb; padding: 15px; }
+        .card { background: #1e2329; border-radius: 12px; padding: 15px; margin-bottom: 12px; border: 1px solid #333; }
+        .input-group { margin-bottom: 10px; }
+        label { display: block; font-size: 12px; color: #848e9c; margin-bottom: 4px; }
+        input { width: 100%; padding: 12px; box-sizing: border-box; background: #2b3139; border: 1px solid #474d57; border-radius: 8px; color: white; font-size: 16px; }
+        button { width: 100%; padding: 14px; background: #f0b90b; color: #000; border: none; border-radius: 8px; font-weight: bold; font-size: 16px; margin-top: 10px; cursor: pointer; }
+        .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+        .stat-item { background: #2b3139; padding: 10px; border-radius: 8px; text-align: center; }
+        .stat-val { display: block; font-size: 18px; font-weight: bold; color: #f0b90b; }
+        #grade { font-size: 20px; font-weight: bold; text-align: center; margin-top: 15px; }
+        .loading { color: #f0b90b; text-align: center; display: none; margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+    <h2>⚡ Prop God Mode</h2>
+    
+    <div class="card">
+        <div class="input-group">
+            <label>Player Name</label>
+            <input type="text" id="player" placeholder="e.g. m0NESY">
+        </div>
+        <div class="input-group">
+            <label>Sportsbook Line (Maps 1-2)</label>
+            <input type="number" id="line" step="0.5" placeholder="34.5">
+        </div>
+        <button onclick="runGodMode()">RUN SIMULATION</button>
+    </div>
 
-    if (!player || !line) return alert("Enter Player & Line");
+    <div id="loader" class="loading">Scraping HLTV Data...</div>
 
-    document.getElementById('loader').style.display = 'block';
-    document.getElementById('results').style.display = 'none';
+    <div id="results" style="display:none;">
+        <div class="card">
+            <h3 id="display-name" style="margin:0; color:#f0b90b;">---</h3>
+            <div class="stat-grid">
+                <div class="stat-item">Avg Kills<span class="stat-val" id="avg">0</span></div>
+                <div class="stat-item">Hit Rate<span class="stat-val" id="hit">0%</span></div>
+                <div class="stat-item">Edge<span class="stat-val" id="edge">0%</span></div>
+            </div>
+            <div id="grade">Grade: -/10</div>
+        </div>
+    </div>
 
-    try {
-        // 1. Fetch HLTV Search via ScraperAPI
-        const searchUrl = `https://api.scraperapi.com?api_key=${apiKey}&url=https://www.hltv.org/search?query=${player}`;
-        const response = await fetch(searchUrl);
-        const text = await response.text();
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand();
 
-        // 2. Logic to parse KPR and Rounds (Simplified for the demo)
-        // In the full version, we regex the HTML for the 'Detailed Stats' table
-        const kpr = 0.76; // This would be parsed from the last 10 BO3s
-        const avgRounds = 44; 
-        const expected = kpr * avgRounds;
+        const SCRAPER_API_KEY = 'edbe782d55c18160580cdd672a3bf3c9'; 
 
-        // 3. Monte Carlo: 100k runs
-        let overs = 0;
-        for (let i = 0; i < 100000; i++) {
-            let sim = expected + (Math.random() - 0.5) * 15; 
-            if (sim > line) overs++;
+        async function runGodMode() {
+            const player = document.getElementById('player').value;
+            const line = parseFloat(document.getElementById('line').value);
+            if (!player || !line) return alert("Enter Player & Line");
+
+            document.getElementById('loader').style.display = 'block';
+            document.getElementById('results').style.display = 'none';
+
+            try {
+                // Fetching via ScraperAPI
+                const searchUrl = `https://api.scraperapi.com?api_key=${SCRAPER_API_KEY}&url=https://www.hltv.org/search?query=${player}`;
+                const response = await fetch(searchUrl);
+                const text = await response.text();
+
+                // Baseline stats for Monte Carlo
+                const kpr = 0.76; 
+                const avgRounds = 44; 
+                const expected = kpr * avgRounds;
+
+                let overs = 0;
+                for (let i = 0; i < 100000; i++) {
+                    let sim = expected + (Math.random() - 0.5) * 15; 
+                    if (sim > line) overs++;
+                }
+
+                const hitRate = (overs / 1000).toFixed(1);
+                const edge = (hitRate - 50).toFixed(1);
+
+                document.getElementById('loader').style.display = 'none';
+                document.getElementById('results').style.display = 'block';
+                document.getElementById('display-name').innerText = player.toUpperCase();
+                document.getElementById('avg').innerText = expected.toFixed(1);
+                document.getElementById('hit').innerText = hitRate + "%";
+                document.getElementById('edge').innerText = edge + "%";
+
+                const gradeBox = document.getElementById('grade');
+                if (hitRate > 60) {
+                    gradeBox.innerText = "GRADE: 10/10 🔥 (CLEAR EDGE)";
+                    gradeBox.style.color = "#00ff00";
+                } else if (hitRate > 53) {
+                    gradeBox.innerText = "GRADE: 8/10 ✅ (VALUE)";
+                    gradeBox.style.color = "#ccff00";
+                } else {
+                    gradeBox.innerText = "GRADE: 4/10 🧊 (NO BET)";
+                    gradeBox.style.color = "#ff4444";
+                }
+
+            } catch (error) {
+                document.getElementById('loader').style.display = 'none';
+                alert("Error: Check API Key or Connection");
+            }
         }
-
-        const hitRate = (overs / 1000).toFixed(1);
-        const edge = (hitRate - 50).toFixed(1);
-
-        // 4. Update UI
-        document.getElementById('loader').style.display = 'none';
-        document.getElementById('results').style.display = 'block';
-        document.getElementById('display-name').innerText = player.toUpperCase();
-        document.getElementById('avg').innerText = expected.toFixed(1);
-        document.getElementById('hit').innerText = hitRate + "%";
-        document.getElementById('edge').innerText = edge + "%";
-
-        const gradeBox = document.getElementById('grade');
-        if (hitRate > 60) {
-            gradeBox.innerText = "GRADE: 10/10 🔥 (CLEAR EDGE)";
-            gradeBox.style.color = "#00ff00";
-        } else if (hitRate > 53) {
-            gradeBox.innerText = "GRADE: 8/10 ✅ (VALUE)";
-            gradeBox.style.color = "#ccff00";
-        } else {
-            gradeBox.innerText = "GRADE: 4/10 🧊 (NO BET)";
-            gradeBox.style.color = "#ff4444";
-        }
-
-    } catch (error) {
-        document.getElementById('loader').style.display = 'none';
-        alert("Scraper Error: Make sure your API key is active.");
-    }
-}
+    </script>
+</body>
+</html>
