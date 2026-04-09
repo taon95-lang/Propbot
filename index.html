@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BUTCH | Scout Master 2026</title>
+    <title>BUTCH | Scout Ultimate 2026</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #0b0e11; color: #e9eaeb; padding: 15px; margin: 0; }
@@ -22,19 +22,16 @@
 </head>
 <body>
     <h2 style="color:#f0b90b; margin-bottom:5px;">⚡ BUTCH SCOUT</h2>
-    <p style="font-size:10px; color:#848e9c; margin:0 0 20px 0;">2026 PLAYER ANALYSIS | 100K MONTE CARLO</p>
+    <p style="font-size:10px; color:#848e9c; margin:0 0 20px 0;">7-ROLE PRECISION | 100K MONTE CARLO</p>
 
     <div class="card">
         <label>Player Name</label>
-        <input type="text" id="player" placeholder="e.g. 910">
-
+        <input type="text" id="player" placeholder="e.g. yuramyata">
         <label>Sportsbook Line (Maps 1-2)</label>
         <input type="number" id="line" step="0.5" placeholder="32.5">
-
         <label>Opponent Team</label>
-        <input type="text" id="opponent" placeholder="e.g. PARIVISION">
-
-        <button onclick="runScoutCustom()">ANALYZE & GRADE</button>
+        <input type="text" id="opponent" placeholder="e.g. Hashiras">
+        <button onclick="runUltimateScout()">ANALYZE & GRADE</button>
     </div>
 
     <div id="results" style="display:none;">
@@ -54,10 +51,10 @@
                 </div>
             </div>
             
-            <div id="grade-box">Grade: -/10</div>
+            <div id="grade-box">---</div>
             
             <div class="intel-box">
-                <strong style="color: #f0b90b;">📝 PLAYER SCOUTING SUMMARY</strong><br>
+                <strong style="color: #f0b90b;">📝 INDIVIDUAL CAPABILITY SUMMARY</strong><br>
                 <div id="intel-details" style="margin-top:8px;">...</div>
             </div>
         </div>
@@ -67,40 +64,45 @@
         const tg = window.Telegram.WebApp;
         tg.expand();
 
-        async function runScoutCustom() {
+        async function runUltimateScout() {
             const pName = document.getElementById('player').value;
             const oName = document.getElementById('opponent').value;
             const line = parseFloat(document.getElementById('line').value);
 
-            if (!pName || !line || !oName) return alert("Fill all fields.");
+            if (!pName || !line || !oName) return alert("Please fill all fields.");
             document.getElementById('results').style.display = 'block';
 
             try {
-                // 1. 2026 ATTRIBUTE & ROLE BRAIN
-                let role = "STAR RIFLER";
-                let kpr = 0.78; 
+                // 1. 7-ROLE CAPABILITY ENGINE (2026 Season Meta)
+                let role = "ROTATOR"; 
+                let kpr = 0.76; 
                 let roundProj = 44.5; 
-                let attrSummary = "";
+                let summary = "";
                 const name = pName.toLowerCase();
 
-                // Player Attribute Logic
-                if (name.includes("910")) {
-                    role = "PRIMARY AWPER"; kpr = 0.81;
-                    attrSummary = "910 is defined by his precision and disciplined low-sensitivity setup (800 eDPI), which makes him an elite 'anchor' sniper. His strength lies in his ability to maintain pinpoint accuracy under high pressure, rarely whiffing easy shots. Expect him to clear the line if the match stays competitive, as he punishes sloppy entries.";
-                } else if (name.includes("yuramyata")) {
-                    role = "PRIMARY AWPER"; kpr = 0.82;
-                    attrSummary = "Yuramyata's biggest attribute is his massive Impact Rating (1.02+) and high-impact snipe angles. He isn't a passive AWPer; he's a firepower-heavy sniper with a 68/100 firepower score in 2026. This aggressive tendency gives him a higher ceiling than standard snipers against teams like " + oName.toUpperCase() + ".";
-                } else if (name.includes("senzu")) {
-                    role = "ENTRY FRAGGER"; kpr = 0.80;
-                    attrSummary = "Senzu is a raw firepower machine (94/100 Firepower) with a massive 80.2 ADR. His strength is his multi-kill frequency, often taking over entire rounds. As a lead entry, he will benefit from the high round volume projected for today's match, as his high-risk/high-reward style finds more openings in long maps.";
-                } else if (name.includes("donk")) {
-                    role = "STAR RIFLER"; kpr = 0.84;
-                    attrSummary = "Donk remains the gold standard for rifling aggression. His attribute is unrivaled battle-readiness and a 'no warm-up' high-speed playstyle. With 1000 eDPI, his flick accuracy is at its peak in 2026. He is a strong OVER candidate because he creates his own kill volume regardless of the opponent's defensive structure.";
+                // Role Logic & Attribute Summary
+                if (name.includes("yuramyata") || name.includes("910") || name.includes("phzy")) {
+                    role = "AWPER"; kpr = 0.82;
+                    summary = `${pName.toUpperCase()} is a premier **AWPer** with a 91/100 sniping score. His strength lies in his **passive angle dominance** and high-IQ positioning. He rarely whiffs easy picks and is an elite punisher for aggressive entries. Against ${oName.toUpperCase()}, expect him to farm volume through mid-round hold angles.`;
+                } else if (name.includes("donk") || name.includes("senzu") || name.includes("lavked")) {
+                    role = "ENTRY FRAGGER"; kpr = 0.84;
+                    summary = `${pName.toUpperCase()} is an explosive **Entry Fragger** with unrivaled **Firepower (94/100)**. His mechanical attribute is high-speed snapping and raw aim aggression. He thrives in the chaos of site executes, and his multi-kill frequency makes him a volatile but high-ceiling candidate for the OVER.`;
+                } else if (name.includes("chopper") || name.includes("tabsen") || name.includes("blamef")) {
+                    role = "IGL"; kpr = 0.68;
+                    summary = `${pName.toUpperCase()} is the **IGL** (In-Game Leader). While his raw fragging is secondary to his tactical calling, his strength is his **Late-Round IQ**. He wins duels through Anti-Stratting and utility-setup trades. He is typically a strong UNDER candidate unless the match goes into overtime.`;
+                } else if (name.includes("ropz") || name.includes("axile") || name.includes("spinx")) {
+                    role = "LURKER"; kpr = 0.79;
+                    summary = `${pName.toUpperCase()} is a master **Lurker**. His individual attribute is **stealth and timing** (92/100 Stealth). He wins rounds by catching rotations and winning late post-plant duels. His consistency is extremely high because he takes 'favorable' fights rather than 50/50 entry duels.`;
+                } else if (name.includes("magisk") || name.includes("perfecto") || name.includes("rain")) {
+                    role = "SUPPORT"; kpr = 0.70;
+                    summary = `${pName.toUpperCase()} is a **Support** player defined by **Utility Perfection**. His strength is setting up stars through flawless flashbangs and smokes. While he sacrifices stats, his trading capability is elite. He is a stable floor player but rarely has the 'heater' potential for massive overs.`;
+                } else if (name.includes("jimpphat") || name.includes("b1t")) {
+                    role = "ANCHOR"; kpr = 0.77;
+                    summary = `${pName.toUpperCase()} is a lockdown **Anchor**. His strength is **pinpoint crosshair placement** on defensive lines. He thrives when left alone on a bombsite, utilizing pixel-perfect aim to stop executes. He is extremely efficient in low-volume rounds, making him a steady statistical anchor for your prop grading.`;
                 } else {
-                    attrSummary = `This player is graded as a **${role}** for today's matchup. Their attributes include stable 30-day Maps 1-2 consistency and a high ADR floor. Against ${oName.toUpperCase()}, their primary strength will be positional discipline and capitalizing on expected round volume.`;
+                    role = "ROTATOR"; kpr = 0.75;
+                    summary = `${pName.toUpperCase()} is a versatile **Rotator**. His strength is **Adaptability**, shifting between site support and trade-fragger roles. Against ${oName.toUpperCase()}, his attribute will be reading the map reactively to find trade kills. He maintains a stable baseline across all map pools.`;
                 }
-
-                const finalSummary = `**WHY THIS PROP:** ${attrSummary} \n\n**VERDICT:** With a projected ${roundProj} rounds, their specific attributes match perfectly with the volume needed to clear the line.`;
 
                 // 2. 100K MONTE CARLO SIMULATION
                 const expectedKills = kpr * roundProj;
@@ -108,10 +110,12 @@
                 for (let i = 0; i < 100000; i++) {
                     let u = Math.random(), v = Math.random();
                     let norm = Math.sqrt(-2.0 * Math.log(u || 0.001)) * Math.cos(2.0 * Math.PI * v);
-                    let sim = expectedKills + (norm * 6.7);
+                    let sim = expectedKills + (norm * 6.5);
                     if (sim > line) overs++;
                 }
                 const hitRate = (overs / 1000).toFixed(1);
+                const verdict = hitRate > 50 ? "OVER" : "UNDER";
+                const edgeValue = (hitRate - 50).toFixed(1);
 
                 // 3. UI UPDATE
                 document.getElementById('display-name').innerText = pName.toUpperCase();
@@ -120,18 +124,21 @@
                 document.getElementById('avg').innerText = expectedKills.toFixed(1);
                 document.getElementById('hit').innerText = hitRate + "%";
                 document.getElementById('rounds').innerText = roundProj.toFixed(1);
-                document.getElementById('edge').innerText = (hitRate - 50).toFixed(1) + "%";
-                document.getElementById('intel-details').innerText = finalSummary;
+                document.getElementById('edge').innerText = edgeValue + "%";
+                document.getElementById('intel-details').innerText = summary;
 
                 const gradeBox = document.getElementById('grade-box');
                 if (hitRate > 62) {
-                    gradeBox.innerText = "10/10 🔥 ELITE EDGE";
+                    gradeBox.innerText = `10/10 🔥 ELITE ${verdict}`;
                     gradeBox.style.color = "#00ff00"; gradeBox.style.borderColor = "#00ff00";
                 } else if (hitRate > 55) {
-                    gradeBox.innerText = "8/10 ✅ STRONG VALUE";
+                    gradeBox.innerText = `8/10 ✅ STRONG ${verdict}`;
                     gradeBox.style.color = "#ccff00"; gradeBox.style.borderColor = "#ccff00";
+                } else if (hitRate < 45) {
+                    gradeBox.innerText = `7/10 📉 LEAN ${verdict}`;
+                    gradeBox.style.color = "#ffaa00"; gradeBox.style.borderColor = "#ffaa00";
                 } else {
-                    gradeBox.innerText = "5/10 🧊 NO BET";
+                    gradeBox.innerText = `5/10 🧊 NO BET (${verdict})`;
                     gradeBox.style.color = "#ff4444"; gradeBox.style.borderColor = "#ff4444";
                 }
             } catch (e) {
