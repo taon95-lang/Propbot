@@ -3,42 +3,51 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Prop God Mode</title>
+    <title>BUTCH | Auto-Prop Grader</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
-        body { font-family: sans-serif; background: #0b0e11; color: #e9eaeb; padding: 15px; }
+        body { font-family: 'Segoe UI', sans-serif; background: #0b0e11; color: #e9eaeb; padding: 15px; margin: 0; }
         .card { background: #1e2329; border-radius: 12px; padding: 15px; margin-bottom: 12px; border: 1px solid #333; }
-        label { display: block; font-size: 12px; color: #848e9c; margin-bottom: 5px; }
-        input { width: 100%; padding: 12px; box-sizing: border-box; background: #2b3139; border: 1px solid #474d57; border-radius: 8px; color: white; margin-bottom: 10px; font-size: 16px; }
-        button { width: 100%; padding: 14px; background: #f0b90b; color: #000; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; }
-        .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 15px; }
-        .stat-item { background: #2b3139; padding: 10px; border-radius: 8px; text-align: center; }
-        .stat-val { display: block; font-size: 18px; font-weight: bold; color: #f0b90b; }
-        #grade { font-size: 20px; font-weight: bold; text-align: center; margin-top: 15px; }
-        #loader { color: #f0b90b; text-align: center; display: none; margin-top: 10px; }
+        label { display: block; font-size: 11px; color: #848e9c; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 1px; }
+        input, select { width: 100%; padding: 12px; box-sizing: border-box; background: #2b3139; border: 1px solid #474d57; border-radius: 8px; color: white; margin-bottom: 10px; font-size: 16px; }
+        button { width: 100%; padding: 16px; background: #f0b90b; color: #000; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 16px; }
+        .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+        .stat-item { background: #2b3139; padding: 12px; border-radius: 8px; text-align: center; border: 1px solid #333; }
+        .stat-label { font-size: 10px; color: #848e9c; display: block; }
+        .stat-val { font-size: 18px; font-weight: bold; color: #f0b90b; }
+        #grade-box { font-size: 20px; font-weight: bold; text-align: center; margin-top: 15px; padding: 12px; border-radius: 8px; }
+        .risk-badge { display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 10px; font-weight: bold; margin-bottom: 10px; }
     </style>
 </head>
 <body>
-    <h2>⚡ Prop God Mode</h2>
+    <h2 style="color:#f0b90b; margin-bottom:5px;">⚡ BUTCH AUTO-GRADER</h2>
+    <p style="font-size:10px; color:#848e9c; margin-top:0; margin-bottom:20px;">SYSTEM: ODDS-AWARE MONTE CARLO (MAPS 1-2)</p>
+
     <div class="card">
         <label>Player Name</label>
-        <input type="text" id="player" placeholder="e.g. m0NESY">
-        <label>Sportsbook Line (Maps 1-2)</label>
-        <input type="number" id="line" step="0.5" placeholder="34.5">
-        <button onclick="runGodMode()">RUN SIMULATION</button>
+        <input type="text" id="player" placeholder="e.g. mag1k3Y">
+        
+        <label>Sportsbook Line</label>
+        <input type="number" id="line" step="0.5" placeholder="32.5">
+        
+        <label>Match Series Odds (Favorite)</label>
+        <input type="number" id="odds" step="0.01" placeholder="e.g. 1.80">
+        
+        <button onclick="runAutoSim()">ANALYZE MATCHUP</button>
     </div>
 
-    <div id="loader">Fetching HLTV Stats...</div>
-
     <div id="results" style="display:none;">
+        <div id="risk-level" class="risk-badge"></div>
         <div class="card">
             <h3 id="display-name" style="margin:0; color:#f0b90b;">---</h3>
             <div class="stat-grid">
-                <div class="stat-item">Avg Kills<span class="stat-val" id="avg">0</span></div>
-                <div class="stat-item">Hit Rate<span class="stat-val" id="hit">0%</span></div>
-                <div class="stat-item">Edge<span class="stat-val" id="edge">0%</span></div>
+                <div class="stat-item"><span class="stat-label">Proj Rounds</span><span class="stat-val" id="proj-rounds">0</span></div>
+                <div class="stat-item"><span class="stat-label">Hit Rate</span><span class="stat-val" id="hit">0%</span></div>
+                <div class="stat-item"><span class="stat-label">Exp Kills</span><span class="stat-val" id="avg">0</span></div>
+                <div class="stat-item"><span class="stat-label">Edge</span><span class="stat-val" id="edge">0%</span></div>
             </div>
-            <div id="grade">Grade: -/10</div>
+            <div id="grade-box">Grade: -/10</div>
+            <p id="logic-note" style="font-size:11px; color:#848e9c; text-align:center; padding: 0 10px;"></p>
         </div>
     </div>
 
@@ -46,63 +55,89 @@
         const tg = window.Telegram.WebApp;
         tg.expand();
 
-        async function runGodMode() {
+        function runAutoSim() {
             const player = document.getElementById('player').value;
             const line = parseFloat(document.getElementById('line').value);
-            const apiKey = 'edbe782d55c18160580cdd672a3bf3c9'; 
+            const odds = parseFloat(document.getElementById('odds').value) || 1.85;
 
             if (!player || !line) return alert("Enter Player & Line");
 
-            document.getElementById('loader').style.display = 'block';
-            document.getElementById('results').style.display = 'none';
+            // --- 1. AUTO-CALCULATE STOMP RISK & ROUND PROJECTION ---
+            let roundProj = 43.0; // Default base for Maps 1-2
+            let riskLabel = "COMPETITIVE";
+            let riskColor = "#2481cc";
+            let multiplier = 1.0;
 
-            try {
-                // Fetch HLTV Search via ScraperAPI
-                const searchUrl = `https://api.scraperapi.com?api_key=${apiKey}&url=https://www.hltv.org/search?query=${player}`;
-                const response = await fetch(searchUrl);
-                
-                // --- DATA INPUTS (Last 10 BO3, Maps 1-2) ---
-                const kpr = 0.78; 
-                const projRounds = 44; 
-                const meanKills = kpr * projRounds;
-                const stdDev = 6.5; 
+            if (odds < 1.30) {
+                roundProj = 38.5; // High Stomp Risk
+                riskLabel = "STOMP RISK (HIGH)";
+                riskColor = "#ff4444";
+                multiplier = 0.88;
+            } else if (odds < 1.60) {
+                roundProj = 41.5; // Moderate Favorite
+                riskLabel = "FAVORITE (MODERATE)";
+                riskColor = "#ffaa00";
+                multiplier = 0.95;
+            } else if (odds >= 1.60 && odds <= 2.10) {
+                roundProj = 45.5; // Coinflip/OT Risk
+                riskLabel = "BLOODBATH (CLOSE)";
+                riskColor = "#00ff00";
+                multiplier = 1.08;
+            }
 
-                // --- 100,000 MONTE CARLO SIMULATIONS ---
-                let overs = 0;
-                for (let i = 0; i < 100000; i++) {
-                    let u = Math.random(), v = Math.random();
-                    let norm = Math.sqrt(-2.0 * Math.log(u || 0.001)) * Math.cos(2.0 * Math.PI * v);
-                    let simResult = meanKills + (norm * stdDev);
-                    if (simResult > line) overs++;
-                }
+            // --- 2. MANIFESTO MATH ---
+            const kpr = 0.78; 
+            const expectedKills = kpr * roundProj * multiplier;
+            let overs = 0;
+            const stdDev = 6.8;
 
-                const hitRate = (overs / 1000).toFixed(1);
-                const edge = (hitRate - 50).toFixed(1);
+            // 100,000 MONTE CARLO RUNS
+            for (let i = 0; i < 100000; i++) {
+                let u = Math.random(), v = Math.random();
+                let norm = Math.sqrt(-2.0 * Math.log(u || 0.001)) * Math.cos(2.0 * Math.PI * v);
+                let sim = expectedKills + (norm * stdDev);
+                if (sim > line) overs++;
+            }
 
-                document.getElementById('loader').style.display = 'none';
-                document.getElementById('results').style.display = 'block';
-                document.getElementById('display-name').innerText = player.toUpperCase();
-                document.getElementById('avg').innerText = meanKills.toFixed(1);
-                document.getElementById('hit').innerText = hitRate + "%";
-                document.getElementById('edge').innerText = edge + "%";
+            const hitRate = (overs / 1000).toFixed(1);
+            const edge = (hitRate - 50).toFixed(1);
 
-                const gradeBox = document.getElementById('grade');
-                if (hitRate > 62) {
-                    gradeBox.innerText = "GRADE: 10/10 🔥";
-                    gradeBox.style.color = "#00ff00";
-                } else if (hitRate > 55) {
-                    gradeBox.innerText = "GRADE: 8/10 ✅";
-                    gradeBox.style.color = "#ccff00";
-                } else if (hitRate < 45) {
-                    gradeBox.innerText = "GRADE: UNDER 📉";
-                    gradeBox.style.color = "#ffaa00";
-                } else {
-                    gradeBox.innerText = "GRADE: 5/10 🧊";
-                    gradeBox.style.color = "#ff4444";
-                }
-            } catch (e) {
-                document.getElementById('loader').style.display = 'none';
-                alert("Scraper Error. Check connection.");
+            // --- 3. UI UPDATE ---
+            document.getElementById('results').style.display = 'block';
+            const badge = document.getElementById('risk-level');
+            badge.innerText = riskLabel;
+            badge.style.background = riskColor;
+            badge.style.color = "#000";
+
+            document.getElementById('display-name').innerText = player.toUpperCase();
+            document.getElementById('proj-rounds').innerText = roundProj.toFixed(1);
+            document.getElementById('avg').innerText = expectedKills.toFixed(1);
+            document.getElementById('hit').innerText = hitRate + "%";
+            document.getElementById('edge').innerText = edge + "%";
+
+            const gradeBox = document.getElementById('grade-box');
+            const note = document.getElementById('logic-note');
+
+            if (hitRate > 62) {
+                gradeBox.innerText = "10/10 🔥 ELITE MISPRICE";
+                gradeBox.style.background = "rgba(0, 255, 0, 0.2)";
+                gradeBox.style.color = "#00ff00";
+                note.innerText = `Logic: Line is wildly below projection for a ${riskLabel} match. Full send.`;
+            } else if (hitRate > 55) {
+                gradeBox.innerText = "8/10 ✅ STRONG VALUE";
+                gradeBox.style.background = "rgba(204, 255, 0, 0.1)";
+                gradeBox.style.color = "#ccff00";
+                note.innerText = "Logic: Numbers and context agree. Solid edge against the book.";
+            } else if (hitRate < 45) {
+                gradeBox.innerText = "UNDER 📉 TRAP LINE";
+                gradeBox.style.background = "rgba(255, 170, 0, 0.1)";
+                gradeBox.style.color = "#ffaa00";
+                note.innerText = "Logic: Line is too high for projected round volume. Lean Under.";
+            } else {
+                gradeBox.innerText = "5/10 🧊 NO BET";
+                gradeBox.style.background = "rgba(255, 68, 68, 0.1)";
+                gradeBox.style.color = "#ff4444";
+                note.innerText = "Logic: Line is accurately priced. No mathematical advantage.";
             }
         }
     </script>
