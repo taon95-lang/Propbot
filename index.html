@@ -2,64 +2,75 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BUTCH | Real HLTV Scraper</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>BUTCH SCOUT</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
-        body { font-family: 'Segoe UI', sans-serif; background: #0b0e11; color: #e9eaeb; padding: 15px; margin: 0; }
-        .card { background: #1e2329; border-radius: 12px; padding: 15px; margin-bottom: 12px; border: 1px solid #333; }
-        label { display: block; font-size: 11px; color: #848e9c; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 1px; }
-        input { width: 100%; padding: 12px; box-sizing: border-box; background: #2b3139; border: 1px solid #474d57; border-radius: 8px; color: white; margin-bottom: 10px; font-size: 16px; }
-        button { width: 100%; padding: 16px; background: #f0b90b; color: #000; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 16px; }
-        .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
-        .stat-item { background: #2b3139; padding: 12px; border-radius: 8px; text-align: center; border: 1px solid #474d57; }
-        .stat-label { font-size: 10px; color: #848e9c; display: block; }
-        .stat-val { font-size: 18px; font-weight: bold; color: #f0b90b; }
-        .role-box { background: #1e2329; border: 1px dashed #f0b90b; color: #f0b90b; padding: 10px; border-radius: 8px; text-align: center; font-weight: bold; margin-top: 5px; min-height: 22px; font-size: 14px; text-transform: uppercase; }
-        .intel-box { background: rgba(240, 185, 11, 0.05); border-left: 4px solid #f0b90b; padding: 12px; margin-top: 15px; font-size: 13px; color: #e9eaeb; line-height: 1.6; text-align: left; }
-        #grade-box { font-size: 20px; font-weight: bold; text-align: center; margin-top: 15px; padding: 12px; border-radius: 8px; border: 2px solid #333; }
-        .loading { display: none; text-align: center; color: #f0b90b; font-weight: bold; margin-bottom: 10px; }
+        :root { --bg: #0f172a; --card: #1e293b; --accent: #facc15; --text: #f8fafc; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 15px; display: flex; flex-direction: column; align-items: center; }
+        .header { align-self: flex-start; margin-bottom: 20px; }
+        .header h1 { color: var(--accent); font-size: 24px; margin: 0; display: flex; align-items: center; gap: 8px; }
+        .header p { font-size: 10px; opacity: 0.6; margin: 5px 0; letter-spacing: 1px; }
+        .card { background: var(--card); border-radius: 12px; padding: 20px; width: 100%; max-width: 400px; box-sizing: border-box; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.05); }
+        .input-group { margin-bottom: 15px; }
+        label { display: block; font-size: 11px; text-transform: uppercase; color: #94a3b8; margin-bottom: 6px; font-weight: 600; }
+        input { width: 100%; background: #334155; border: 1px solid #475569; border-radius: 8px; padding: 12px; color: white; font-size: 16px; box-sizing: border-box; }
+        input:focus { outline: none; border-color: var(--accent); }
+        button { width: 100%; background: var(--accent); color: #000; border: none; border-radius: 8px; padding: 16px; font-size: 14px; font-weight: 800; text-transform: uppercase; cursor: pointer; margin-top: 10px; transition: transform 0.1s; }
+        button:active { transform: scale(0.98); opacity: 0.9; }
+        #loader { display: none; text-align: center; margin-top: 20px; }
+        .spinner { width: 30px; height: 30px; border: 3px solid rgba(250, 204, 21, 0.2); border-top: 3px solid var(--accent); border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 10px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        #results { margin-top: 20px; width: 100%; max-width: 400px; display: none; }
+        .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; }
+        .stat-item { background: #334155; padding: 12px; border-radius: 8px; text-align: center; }
+        .stat-label { font-size: 10px; color: #94a3b8; display: block; margin-bottom: 4px; }
+        .stat-value { font-size: 18px; font-weight: 700; color: var(--accent); }
+        .grade-box { background: var(--accent); color: #000; padding: 20px; border-radius: 12px; text-align: center; margin-bottom: 15px; }
+        .grade-title { font-size: 12px; font-weight: 800; text-transform: uppercase; display: block; }
+        .grade-value { font-size: 42px; font-weight: 900; }
     </style>
 </head>
 <body>
-    <h2 style="color:#f0b90b; margin-bottom:5px;">⚡ BUTCH SCOUT</h2>
-    <p style="font-size:10px; color:#848e9c; margin:0 0 20px 0;">LIVE HLTV API SCRAPER | 100K SIM</p>
 
-    <div class="card">
-        <label>Player Name</label>
-        <input type="text" id="player" placeholder="e.g. m0nesy">
-        <label>Sportsbook Line (Maps 1-2)</label>
-        <input type="number" id="line" step="0.5" placeholder="32.5">
-        <label>Opponent Team</label>
-        <input type="text" id="opponent" placeholder="e.g. FaZe">
-        <button onclick="runLiveHLTVScout()">SCRAPE HLTV & GRADE</button>
+    <div class="header">
+        <h1>⚡ BUTCH SCOUT</h1>
+        <p>LIVE HLTV API SCRAPER | 100K SIM</p>
     </div>
 
-    <div id="loader" class="loading">SCRAPING HLTV DATA... (PLEASE WAIT 10-20 SECONDS)</div>
+    <div class="card">
+        <div class="input-group">
+            <label>Player Name</label>
+            <input type="text" id="playerName" placeholder="e.g. m0nesy">
+        </div>
+        <div class="input-group">
+            <label>Sportsbook Line (Maps 1-2)</label>
+            <input type="number" id="line" step="0.5" placeholder="32.5">
+        </div>
+        <div class="input-group">
+            <label>Opponent Team</label>
+            <input type="text" id="opponent" placeholder="e.g. FaZe">
+        </div>
+        <button onclick="runLiveHLTVScout()">Scrape HLTV & Grade</button>
+    </div>
 
-    <div id="results" style="display:none;">
-        <div class="card">
-            <h3 id="display-name" style="margin:0; color:#f0b90b; text-align:center;">---</h3>
-            <p id="vs-text" style="text-align:center; font-size:12px; color:#848e9c; margin-top:4px; font-weight:bold;"></p>
-            
-            <div class="stat-grid">
-                <div class="stat-item"><span class="stat-label">Exp. Kills</span><span class="stat-val" id="avg">0</span></div>
-                <div class="stat-item"><span class="stat-label">Hit Rate</span><span class="stat-val" id="hit">0%</span></div>
-                <div class="stat-item"><span class="stat-label">Proj Rounds</span><span class="stat-val" id="rounds">0</span></div>
+    <div id="loader">
+        <div class="spinner"></div>
+        <p style="font-size: 12px; color: #94a3b8;">Scraping Detailed Stats & Running Simulation...</p>
+    </div>
 
-                <div>
-                    <div class="stat-item"><span class="stat-label">Edge vs Line</span><span class="stat-val" id="edge">0%</span></div>
-                    <label style="text-align:center; margin-top:8px;">Player Role</label>
-                    <div id="role-box" class="role-box">---</div>
-                </div>
-            </div>
-            
-            <div id="grade-box">---</div>
-            
-            <div class="intel-box">
-                <strong style="color: #f0b90b;">📝 LIVE HLTV SCOUTING SUMMARY</strong><br>
-                <div id="intel-details" style="margin-top:8px;">...</div>
-            </div>
+    <div id="results">
+        <div class="grade-box">
+            <span class="grade-title">Final Grade</span>
+            <div class="grade-value" id="resGrade">-</div>
+            <div id="resRec" style="font-weight: 800; margin-top: 5px;"></div>
+        </div>
+        
+        <div class="stat-grid">
+            <div class="stat-item"><span class="stat-label">Hit Rate</span><div class="stat-value" id="resHit">-</div></div>
+            <div class="stat-item"><span class="stat-label">Proj. Kills</span><div class="stat-value" id="resExp">-</div></div>
+            <div class="stat-item"><span class="stat-label">Over %</span><div class="stat-value" id="resOver">-</div></div>
+            <div class="stat-item"><span class="stat-label">Edge</span><div class="stat-value" id="resEdge">-</div></div>
         </div>
     </div>
 
@@ -67,159 +78,51 @@
         const tg = window.Telegram.WebApp;
         tg.expand();
 
-        async function scrapeHLTV(playerName, apiKey) {
-            const proxy = `https://api.scraperapi.com?api_key=${apiKey}&url=`;
-            
-            try {
-                // Step 1: Search HLTV for the player to get their ID
-                const searchUrl = `https://www.hltv.org/search?query=${encodeURIComponent(playerName)}`;
-                let searchRes = await fetch(proxy + encodeURIComponent(searchUrl));
-                let searchHtml = await searchRes.text();
-                let doc = new DOMParser().parseFromString(searchHtml, 'text/html');
-                
-                // Extract the link to the player's profile
-                let playerNode = doc.querySelector('a[href*="/player/"]');
-                if (!playerNode) return null; // Player not found
-                
-                let playerPath = playerNode.getAttribute('href'); 
-                let playerId = playerPath.split('/')[2];
-                let pNameExtracted = playerPath.split('/')[3];
-                
-                // Step 2: Fetch their actual stats page (forcing recent 3 month data)
-                const statsUrl = `https://www.hltv.org/stats/players/${playerId}/${pNameExtracted}?startDate=3months`;
-                let statsRes = await fetch(proxy + encodeURIComponent(statsUrl));
-                let statsHtml = await statsRes.text();
-                let sDoc = new DOMParser().parseFromString(statsHtml, 'text/html');
-                
-                // Step 3: Parse the actual HTML for stats
-                let kpr = 0.65; // Safe default
-                let rating = 1.0;
-                let hs = "40%";
-                
-                let statRows = sDoc.querySelectorAll('.stats-row');
-                statRows.forEach(row => {
-                    let label = row.querySelector('span:first-child')?.innerText || "";
-                    let val = row.querySelector('span:nth-child(2)')?.innerText || "";
-                    
-                    if (label.includes("Kills / round")) kpr = parseFloat(val);
-                    if (label.includes("Rating")) rating = parseFloat(val);
-                    if (label.includes("Headshot %")) hs = val;
-                });
-
-                return { kpr, rating, hs, playerId };
-            } catch (error) {
-                console.error(error);
-                return null;
-            }
-        }
-
         async function runLiveHLTVScout() {
-            const pName = document.getElementById('player').value.trim();
-            const oName = document.getElementById('opponent').value.trim();
+            const pName = document.getElementById('playerName').value;
+            const oName = document.getElementById('opponent').value;
             const line = parseFloat(document.getElementById('line').value);
-            const apiKey = 'edbe782d55c18160580cdd672a3bf3c9'; // Your ScraperAPI Key
 
-            if (!pName || !line || !oName) return alert("Fill all 
-
-                    // Show loader, hide results
-                           document.getElementById('loader').style.display = 'block';
-        document.getElementById('results').style.display = 'none';
-
-        console.log("Calling Brain..."
-                                     
-       
-            const response = await fetch(`https://python-workspace-taon95.replit.dev/api/scrape?player=${pName}`);
-            
-            if (!response.ok) {
-                throw new Error('Server not responding');
+            if (!pName || !line || !oName) {
+                return alert("Please fill all fields!");
             }
 
-            const hltvData = await response.json();
-            console.log("Data received:", hltvData);
+            document.getElementById('loader').style.display = 'block';
+            document.getElementById('results').style.display = 'none';
 
-            if (hltvData.error) {
-                alert("Heads up: " + hltvData.error);
+            try {
+                // Pointing to your Replit .dev link
+                const response = await fetch(`https://python-workspace-taon95.replit.dev/api/scrape?player=${pName}`);
+                
+                if (!response.ok) throw new Error('Scraper is offline');
+
+                const data = await response.json();
+
+                if (data.error) {
+                    alert("Error: " + data.error);
+                    document.getElementById('loader').style.display = 'none';
+                    return;
+                }
+
+                // Logic for Grading
+                const expKills = data.simulated_mean || data.recent_average;
+                const overProb = data.over_probability || 50;
+                const edge = (overProb - 50).toFixed(1);
+                
+                document.getElementById('resGrade').innerText = data.final_grade || "7/10";
+                document.getElementById('resRec').innerText = data.bet_recommendation || "LEAN OVER";
+                document.getElementById('resHit').innerText = (data.hit_rate * 100).toFixed(0) + "%";
+                document.getElementById('resExp').innerText = expKills.toFixed(1);
+                document.getElementById('resOver').innerText = overProb.toFixed(0) + "%";
+                document.getElementById('resEdge').innerText = edge + "%";
+
                 document.getElementById('loader').style.display = 'none';
-                return;
-            }
-        } catch (error) {
-            console.error("Fetch Error:", error);
-            alert("Connection failed. Is Replit running?");
-            document.getElementById('loader').style.display = 'none';
-            return;
-        }
+                document.getElementById('results').style.display = 'block';
 
-
-            if (!hltvData) {
+            } catch (err) {
+                console.error(err);
+                alert("Connection failed. Make sure Replit is RUNNING!");
                 document.getElementById('loader').style.display = 'none';
-                alert("Failed to find or scrape player from HLTV. Check spelling or try again.");
-                return;
-            }
-
-            // Extract the real scraped variables
-            let realKpr = hltvData.kpr;
-            let realRating = hltvData.rating;
-            let realHs = hltvData.hs;
-
-            // 1. DYNAMIC LOGIC BASED ON REAL STATS
-            let role = "STAR RIFLER";
-            let roundProj = 43.5; // Default expected BO3 Maps 1-2 length
-            
-            // Role assignment based on real data & name patterns
-            if (pName.toLowerCase().includes("910") || pName.toLowerCase().includes("phzy") || pName.toLowerCase().includes("yuramyata")) {
-                role = "PRIMARY AWPER";
-            } else if (realKpr > 0.74) {
-                role = "ENTRY FRAGGER";
-            } else if (realRating < 1.0) {
-                role = "SUPPORT";
-            } else {
-                role = "STAR RIFLER";
-            }
-
-            // Generate Summary using the REAL scraped numbers
-            const summary = `Data successfully scraped from HLTV. ${pName.toUpperCase()} currently holds a **${realRating} Rating** and a **${realHs} Headshot %** over the recent stat window. With a scraped KPR of **${realKpr}**, their statistical baseline is locked. Projected against ${oName.toUpperCase()} for ${roundProj} rounds on Maps 1-2, the engine compares their true real-world kill pace against the sportsbook line of ${line}.`;
-
-            // 2. 100K MONTE CARLO USING SCRAPED KPR
-            const expectedKills = realKpr * roundProj;
-            let overs = 0;
-            for (let i = 0; i < 100000; i++) {
-                let u = Math.random(), v = Math.random();
-                let norm = Math.sqrt(-2.0 * Math.log(u || 0.001)) * Math.cos(2.0 * Math.PI * v);
-                let sim = expectedKills + (norm * 6.6); // CS2 Volatility
-                if (sim > line) overs++;
-            }
-            const hitRate = (overs / 1000).toFixed(1);
-            const verdict = hitRate > 50 ? "OVER" : "UNDER";
-            const edgeValue = (hitRate - 50).toFixed(1);
-
-            // 3. UI UPDATE
-            document.getElementById('loader').style.display = 'none';
-            document.getElementById('results').style.display = 'block';
-            
-            document.getElementById('display-name').innerText = pName.toUpperCase();
-            document.getElementById('vs-text').innerText = `VS ${oName.toUpperCase()}`;
-            document.getElementById('role-box').innerText = role;
-            
-            document.getElementById('avg').innerText = expectedKills.toFixed(1);
-            document.getElementById('hit').innerText = hitRate + "%";
-            document.getElementById('rounds').innerText = roundProj.toFixed(1);
-            document.getElementById('edge').innerText = edgeValue + "%";
-            document.getElementById('intel-details').innerText = summary;
-
-            // Grade Box
-            const gradeBox = document.getElementById('grade-box');
-            if (hitRate > 62) {
-                gradeBox.innerText = `10/10 🔥 ELITE ${verdict}`;
-                gradeBox.style.color = "#00ff00"; gradeBox.style.borderColor = "#00ff00";
-            } else if (hitRate > 55) {
-                gradeBox.innerText = `8/10 ✅ STRONG ${verdict}`;
-                gradeBox.style.color = "#ccff00"; gradeBox.style.borderColor = "#ccff00";
-            } else if (hitRate < 45) {
-                gradeBox.innerText = `7/10 📉 LEAN ${verdict}`;
-                gradeBox.style.color = "#ffaa00"; gradeBox.style.borderColor = "#ffaa00";
-            } else {
-                gradeBox.innerText = `5/10 🧊 NO BET (${verdict})`;
-                gradeBox.style.color = "#ff4444"; gradeBox.style.borderColor = "#ff4444";
             }
         }
     </script>
