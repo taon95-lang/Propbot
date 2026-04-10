@@ -126,7 +126,10 @@
             document.getElementById('results').style.display = 'none';
 
             // Scrape Real Data
-            const hltvData = await scrapeHLTV(pName, apiKey);
+            // Fetch live data directly from your Replit Python API
+const response = await fetch(`https://python-workspace-taon95.replit.app/api/scrape?player=${pName}`);
+const hltvData = await response.json();
+
 
             if (!hltvData) {
                 document.getElementById('loader').style.display = 'none';
