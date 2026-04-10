@@ -92,7 +92,7 @@
 
             try {
                 // Pointing to your Replit .dev link
-                const response = await fetch(`https://python-workspace-taon95.replit.dev/api/scrape?player=${pName}`);
+                const response = await fetch(`https://api-server--tavonwebb.repl.co/api/scrape?player=${pName}`);
                 
                 if (!response.ok) throw new Error('Scraper is offline');
 
