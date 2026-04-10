@@ -30,7 +30,7 @@
             const name = document.getElementById('pName').value;
             document.getElementById('loader').style.display = 'block';
             try {
-                // This link matches your screenshot at 4:54 PM
+                
                 const r = await fetch(`https://python-workspace-taon95.replit.app/api/scrape?player=${name}`);
                 const d = await r.json();
                 document.getElementById('resGrade').innerText = d.final_grade;
