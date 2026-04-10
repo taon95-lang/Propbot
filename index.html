@@ -10,57 +10,36 @@
         input { width: 85%; padding: 12px; margin: 10px 0; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: white; }
         button { width: 90%; padding: 15px; background: #facc15; color: black; font-weight: bold; border-radius: 8px; border: none; cursor: pointer; }
         #loader { display: none; margin: 20px; }
-        .spinner { width: 30px; height: 30px; border: 4px solid #facc15; border-top: 4px solid transparent; border-radius: 50%; animation: spin 1s linear infinite; margin: auto; }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         #results { display: none; margin-top: 20px; background: #334155; padding: 20px; border-radius: 15px; }
     </style>
 </head>
 <body>
     <h1>⚡ BUTCH SCOUT</h1>
     <div class="card">
-        <input type="text" id="pName" placeholder="Player Name">
+        <input type="text" id="pName" placeholder="Enter Player Name">
         <button onclick="go()">SCRAPE & GRADE</button>
     </div>
-
-    <div id="loader">
-        <div class="spinner"></div>
-        <p>Connecting to Replit...</p>
-    </div>
-
+    <div id="loader">Processing...</div>
     <div id="results">
-        <h2 id="resGrade" style="font-size: 50px; color: #facc15; margin: 0;"></h2>
-        <p id="resRec" style="font-weight: bold; font-size: 18px;"></p>
-        <hr style="border: 0.5px solid #475569; margin: 15px 0;">
-        <p>Proj: <span id="resExp"></span> | Over: <span id="resOver"></span>%</p>
+        <h2 id="resGrade" style="font-size: 50px; color: #facc15;"></h2>
+        <p id="resRec"></p>
     </div>
 
     <script>
         async function go() {
             const name = document.getElementById('pName').value;
-            if(!name) return alert("Enter a name");
-
             document.getElementById('loader').style.display = 'block';
-            document.getElementById('results').style.display = 'none';
-
             try {
-                // FIXED URL - Matches your Replit Artifact ID
-                const r = await fetch(`https://api-server-taon95.replit.dev/api/scrape?player=${name}`);
+                // This link matches your screenshot at 4:54 PM
+                const r = await fetch(`https://python-workspace-taon95.replit.app/api/scrape?player=${name}`);
                 const d = await r.json();
-
-                if (d.error) {
-                    alert(d.error);
-                } else {
-                    document.getElementById('resGrade').innerText = d.final_grade;
-                    document.getElementById('resRec').innerText = d.bet_recommendation;
-                    document.getElementById('resExp').innerText = d.simulated_mean;
-                    document.getElementById('resOver').innerText = d.over_probability;
-                    document.getElementById('results').style.display = 'block';
-                }
+                document.getElementById('resGrade').innerText = d.final_grade;
+                document.getElementById('resRec').innerText = d.bet_recommendation;
+                document.getElementById('results').style.display = 'block';
             } catch (e) {
-                alert("Connection failed! Make sure Replit is RUNNING and PUBLIC.");
-            } finally {
-                document.getElementById('loader').style.display = 'none';
+                alert("Connection failed! Check if Replit is RUNNING.");
             }
+            document.getElementById('loader').style.display = 'none';
         }
     </script>
 </body>
