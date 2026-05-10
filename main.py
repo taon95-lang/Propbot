@@ -19,7 +19,7 @@ async def on_message(message):
 
     content = message.content.lower()
 
-if content.startswith("!grade"):
-    await message.channel.send("🎯 Grading prop...")
+    if content.startswith("!grade"):
+        await message.channel.send("🎯 Grading prop...")
 
 client.run(TOKEN)
