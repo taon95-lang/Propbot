@@ -1,5 +1,6 @@
 import discord
 import os
+from hltv import search_player
 import requests
 from bs4 import BeautifulSoup
 import statistics
