@@ -109,6 +109,28 @@ async def on_message(message):
     elif content.startswith("!grade"):
 
         args = content.split()
+                args = content.split()
+
+        if len(args) < 4:
+            await message.channel.send(
+                "Usage: !grade player line opponent"
+            )
+            return
+
+        player_name = args[1]
+
+        player_data = search_player(player_name)
+
+        if not player_data:
+            await message.channel.send(
+                "❌ Player not found on HLTV"
+            )
+            return
+
+        await message.channel.send(
+            f"✅ Found Player: {player_data['name']} "
+            f"(ID: {player_data['id']})"
+        )
 
         if len(args) < 4:
             await message.channel.send(
