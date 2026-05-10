@@ -1,77 +1,69 @@
 import discord
 import os
-from hltv import search_player
 import requests
 from bs4 import BeautifulSoup
-import statistics
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-url = "https://www.hltv.org"
-response = requests.get(url)
 
-print(response.status_code)
 intents = discord.Intents.default()
 intents.message_content = True
 
 client = discord.Client(intents=intents)
 
-# =========================
-# SAMPLE PLAYER DATABASE
-# Replace later with HLTV scraper
-# =========================
-
-players = {
-    "donk": {
-        "team": "spirit",
-        "role": "Entry",
-        "rating": 1.37,
-        "kpr": 0.92,
-        "dpr": 0.63,
-        "adr": 92.4,
-        "kast": 73.1,
-        "round_swing": "HIGH",
-        "multi_kill": "HIGH",
-        "maps": [34, 29, 31, 42, 38, 27, 36, 33, 30, 40]
-    },
-
-    "m0nesy": {
-        "team": "g2",
-        "role": "AWP",
-        "rating": 1.28,
-        "kpr": 0.84,
-        "dpr": 0.59,
-        "adr": 81.2,
-        "kast": 74.5,
-        "round_swing": "HIGH",
-        "multi_kill": "HIGH",
-        "maps": [35, 28, 39, 32, 31, 30, 26, 34, 37, 29]
-    },
-
-    "zywoo": {
-        "team": "vitality",
-        "role": "AWP",
-        "rating": 1.35,
-        "kpr": 0.88,
-        "dpr": 0.57,
-        "adr": 86.7,
-        "kast": 75.4,
-        "round_swing": "HIGH",
-        "multi_kill": "MEDIUM",
-        "maps": [33, 35, 37, 29, 30, 42, 31, 34, 28, 36]
-    }
+headers = {
+    "User-Agent": (
+        "Mozilla/5.0 "
+        "(Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 "
+        "(KHTML, like Gecko) "
+        "Chrome/122.0 Safari/537.36"
+    )
 }
 
-# =========================
+# =========================================================
+# HLTV PLAYER SEARCH
+# =========================================================
+
+def search_player(player_name):
+
+    url = f"https://www.hltv.org/search?term={player_name}"
+
+    response = requests.get(url, headers=headers)
+
+    if response.status_code != 200:
+        return None
+
+    try:
+
+        data = response.json()
+
+        players = data[0]["players"]
+
+        if not players:
+            return None
+
+        first_player = players[0]
+
+        return {
+            "id": first_player["id"],
+            "name": first_player["name"]
+        }
+
+    except Exception as e:
+        print("HLTV Search Error:", e)
+        return None
+
+# =========================================================
 # BOT ONLINE
-# =========================
+# =========================================================
 
 @client.event
 async def on_ready():
     print(f"✅ Logged in as {client.user}")
 
-# =========================
-# MESSAGE COMMANDS
-# =========================
+# =========================================================
+# MESSAGE EVENT
+# =========================================================
 
 @client.event
 async def on_message(message):
@@ -81,35 +73,22 @@ async def on_message(message):
 
     content = message.content.lower()
 
-    # ======================================
+    # =====================================================
     # !PING
-    # ======================================
+    # =====================================================
 
     if content == "!ping":
         await message.channel.send("🏓 pong")
 
-    # ======================================
-    # !PLAYERS
-    # ======================================
-
-    elif content == "!players":
-
-        names = ", ".join(players.keys())
-
-        await message.channel.send(
-            f"📋 Available Players:\n{names}"
-        )
-
-    # ======================================
-    # !GRADE COMMAND
+    # =====================================================
+    # !GRADE
     # Example:
-    # !grade donk 31.5 faze
-    # ======================================
+    # !grade donk 32.5 spirit
+    # =====================================================
 
     elif content.startswith("!grade"):
 
-        args = content.split()
-                args = content.split()
+        args = message.content.split()
 
         if len(args) < 4:
             await message.channel.send(
@@ -118,6 +97,12 @@ async def on_message(message):
             return
 
         player_name = args[1]
+        line = args[2]
+        opponent = args[3]
+
+        # =================================================
+        # SEARCH PLAYER
+        # =================================================
 
         player_data = search_player(player_name)
 
@@ -127,249 +112,49 @@ async def on_message(message):
             )
             return
 
-        await message.channel.send(
-            f"✅ Found Player: {player_data['name']} "
-            f"(ID: {player_data['id']})"
-        )
-
-        if len(args) < 4:
-            await message.channel.send(
-                "Usage: !grade player line opponent"
-            )
-            return
-
-        player_name = args[1]
-        line = float(args[2])
-        opponent = args[3]
-
-        # ======================
-        # PLAYER CHECK
-        # ======================
-
-        if player_name not in players:
-
-            await message.channel.send(
-                f"❌ No data found for {player_name}"
-            )
-            return
-
-        # ======================
-        # PLAYER DATA
-        # ======================
-
-        player = players[player_name]
-
-        recent_maps = player["maps"]
-
-        avg = round(statistics.mean(recent_maps), 1)
-        median = round(statistics.median(recent_maps), 1)
-        ceiling = max(recent_maps)
-        floor = min(recent_maps)
-
-        std_dev = round(statistics.stdev(recent_maps), 1)
-
-        hits = sum(1 for x in recent_maps if x > line)
-        misses = len(recent_maps) - hits
-
-        hit_rate = round((hits / len(recent_maps)) * 100)
-
-        # ======================
-        # SHORT / NORMAL MAP
-        # ======================
-
-        short_projection = round(avg * 0.80, 1)
-        normal_projection = round(avg, 1)
-
-        # ======================
-        # EDGE
-        # ======================
-
-        edge = round(((avg - line) / line) * 100, 1)
-
-        # ======================
-        # PROJECTION
-        # ======================
-
-        if avg >= line and hit_rate >= 60:
-            projection = "✅ OVER"
-
-        elif avg < line and hit_rate <= 40:
-            projection = "❌ UNDER"
-
-        else:
-            projection = "⛔ NO BET"
-
-        # ======================
-        # GRADE
-        # ======================
-
-        if hit_rate >= 80:
-            grade = "A"
-
-        elif hit_rate >= 70:
-            grade = "B"
-
-        elif hit_rate >= 60:
-            grade = "C"
-
-        else:
-            grade = "F"
-
-        # ======================
-        # EMBED
-        # ======================
+        # =================================================
+        # TEMP TEST OUTPUT
+        # =================================================
 
         embed = discord.Embed(
-            title="🏆 CS2 PROP GRADER",
-            color=discord.Color.green()
+            title="🎯 CS2 PROP GRADE",
+            color=0x00ff00
         )
 
         embed.add_field(
-            name="👤 Player",
-            value=player_name,
-            inline=True
+            name="Player",
+            value=player_data["name"],
+            inline=False
         )
 
         embed.add_field(
-            name="🎯 Line",
+            name="HLTV ID",
+            value=player_data["id"],
+            inline=False
+        )
+
+        embed.add_field(
+            name="Line",
             value=line,
-            inline=True
+            inline=False
         )
 
         embed.add_field(
-            name="⚔ Opponent",
+            name="Opponent",
             value=opponent,
-            inline=True
-        )
-
-        embed.add_field(
-            name="📈 Projection",
-            value=projection,
             inline=False
         )
 
         embed.add_field(
-            name="🏅 Grade",
-            value=grade,
-            inline=True
-        )
-
-        embed.add_field(
-            name="🔥 Hit Rate",
-            value=f"{hit_rate}% ({hits}/10)",
-            inline=True
-        )
-
-        embed.add_field(
-            name="📊 Average",
-            value=avg,
-            inline=True
-        )
-
-        embed.add_field(
-            name="📉 Median",
-            value=median,
-            inline=True
-        )
-
-        embed.add_field(
-            name="📈 Ceiling",
-            value=ceiling,
-            inline=True
-        )
-
-        embed.add_field(
-            name="📉 Floor",
-            value=floor,
-            inline=True
-        )
-
-        embed.add_field(
-            name="📉 Std Dev",
-            value=std_dev,
-            inline=True
-        )
-
-        embed.add_field(
-            name="⚡ KPR",
-            value=player["kpr"],
-            inline=True
-        )
-
-        embed.add_field(
-            name="💀 DPR",
-            value=player["dpr"],
-            inline=True
-        )
-
-        embed.add_field(
-            name="🔥 ADR",
-            value=player["adr"],
-            inline=True
-        )
-
-        embed.add_field(
-            name="🧠 KAST",
-            value=player["kast"],
-            inline=True
-        )
-
-        embed.add_field(
-            name="⭐ Rating",
-            value=player["rating"],
-            inline=True
-        )
-
-        embed.add_field(
-            name="🎭 Role",
-            value=player["role"],
-            inline=True
-        )
-
-        embed.add_field(
-            name="🔄 Round Swing",
-            value=player["round_swing"],
-            inline=True
-        )
-
-        embed.add_field(
-            name="💥 Multi-kill",
-            value=player["multi_kill"],
-            inline=True
-        )
-
-        embed.add_field(
-            name="🗺 Short Projection",
-            value=short_projection,
-            inline=True
-        )
-
-        embed.add_field(
-            name="🗺 Normal Projection",
-            value=normal_projection,
-            inline=True
-        )
-
-        embed.add_field(
-            name="💰 Edge",
-            value=f"{edge}%",
-            inline=True
-        )
-
-        embed.add_field(
-            name="📜 Last 10",
-            value=str(recent_maps),
+            name="Status",
+            value="✅ HLTV Search Working",
             inline=False
         )
-
-        # ======================
-        # SEND EMBED
-        # ======================
 
         await message.channel.send(embed=embed)
 
-# =========================
-# START BOT
-# =========================
+# =========================================================
+# RUN BOT
+# =========================================================
 
 client.run(TOKEN)
