@@ -1,5 +1,7 @@
 import discord
 import os
+import requests
+from bs4 import BeautifulSoup
 import statistics
 
 TOKEN = os.getenv("DISCORD_TOKEN")
