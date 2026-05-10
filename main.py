@@ -17,7 +17,9 @@ async def on_message(message):
     if message.author == client.user:
         return
 
-    if message.content.lower() == "!ping":
-        await message.channel.send("pong")
+    content = message.content.lower()
+
+if content.startswith("!grade"):
+    await message.channel.send("🎯 Grading prop...")
 
 client.run(TOKEN)
