@@ -5,7 +5,10 @@ from bs4 import BeautifulSoup
 import statistics
 
 TOKEN = os.getenv("DISCORD_TOKEN")
+url = "https://www.hltv.org"
+response = requests.get(url)
 
+print(response.status_code)
 intents = discord.Intents.default()
 intents.message_content = True
 
