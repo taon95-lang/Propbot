@@ -1,69 +1,35 @@
 import discord
 import os
-import requests
-from bs4 import BeautifulSoup
 
-TOKEN = os.getenv("DISCORD_TOKEN")
+from scraper import search_player
+
+# =====================================================
+# TOKEN
+# =====================================================
+
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+
+# =====================================================
+# DISCORD SETUP
+# =====================================================
 
 intents = discord.Intents.default()
 intents.message_content = True
 
 client = discord.Client(intents=intents)
 
-headers = {
-    "User-Agent": (
-        "Mozilla/5.0 "
-        "(Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 "
-        "(KHTML, like Gecko) "
-        "Chrome/122.0 Safari/537.36"
-    )
-}
-
-# =========================================================
-# HLTV PLAYER SEARCH
-# =========================================================
-
-def search_player(player_name):
-
-    url = f"https://www.hltv.org/search?term={player_name}"
-
-    response = requests.get(url, headers=headers)
-
-    if response.status_code != 200:
-        return None
-
-    try:
-
-        data = response.json()
-
-        players = data[0]["players"]
-
-        if not players:
-            return None
-
-        first_player = players[0]
-
-        return {
-            "id": first_player["id"],
-            "name": first_player["name"]
-        }
-
-    except Exception as e:
-        print("HLTV Search Error:", e)
-        return None
-
-# =========================================================
+# =====================================================
 # BOT ONLINE
-# =========================================================
+# =====================================================
 
 @client.event
 async def on_ready():
+
     print(f"✅ Logged in as {client.user}")
 
-# =========================================================
-# MESSAGE EVENT
-# =========================================================
+# =====================================================
+# COMMANDS
+# =====================================================
 
 @client.event
 async def on_message(message):
@@ -73,88 +39,111 @@ async def on_message(message):
 
     content = message.content.lower()
 
-    # =====================================================
+    # =================================================
     # !PING
-    # =====================================================
+    # =================================================
 
     if content == "!ping":
+
         await message.channel.send("🏓 pong")
 
-    # =====================================================
+    # =================================================
     # !GRADE
-    # Example:
-    # !grade donk 32.5 spirit
-    # =====================================================
+    # =================================================
 
     elif content.startswith("!grade"):
 
-        args = message.content.split()
+        await message.channel.send(
+            "🔍 Running HLTV scraper test..."
+        )
 
-        if len(args) < 4:
+        # =============================================
+        # FORCE DONK TEST
+        # =============================================
+
+        try:
+
+            player = search_player("donk")
+
+            print("PLAYER RESULT:", player)
+
+        except Exception as e:
+
+            print("SCRAPER ERROR:", e)
+
             await message.channel.send(
-                "Usage: !grade player line opponent"
+                f"❌ Scraper crashed:\n{e}"
             )
+
             return
 
-        player_name = args[1]
-        line = args[2]
-        opponent = args[3]
+        # =============================================
+        # FAILED
+        # =============================================
 
-        # =================================================
-        # SEARCH PLAYER
-        # =================================================
+        if player is None:
 
-        player_data = search_player(player_name)
-
-        if not player_data:
             await message.channel.send(
                 "❌ Player not found on HLTV"
             )
+
             return
 
-        # =================================================
-        # TEMP TEST OUTPUT
-        # =================================================
+        # =============================================
+        # SCRAPER RETURNS:
+        # (player_id, slug, display_name)
+        # =============================================
+
+        player_id = player[0]
+        player_slug = player[1]
+        player_display = player[2]
+
+        # =============================================
+        # HLTV URL
+        # =============================================
+
+        hltv_url = (
+            f"https://www.hltv.org/player/"
+            f"{player_id}/{player_slug}"
+        )
+
+        # =============================================
+        # EMBED
+        # =============================================
 
         embed = discord.Embed(
-            title="🎯 CS2 PROP GRADE",
+            title="🎯 HLTV SCRAPER WORKING",
             color=0x00ff00
         )
 
         embed.add_field(
-            name="Player",
-            value=player_data["name"],
+            name="👤 Player",
+            value=player_display,
             inline=False
         )
 
         embed.add_field(
-            name="HLTV ID",
-            value=player_data["id"],
+            name="🆔 HLTV ID",
+            value=player_id,
             inline=False
         )
 
         embed.add_field(
-            name="Line",
-            value=line,
+            name="🔗 Profile",
+            value=hltv_url,
             inline=False
         )
 
         embed.add_field(
-            name="Opponent",
-            value=opponent,
-            inline=False
-        )
-
-        embed.add_field(
-            name="Status",
-            value="✅ HLTV Search Working",
+            name="📡 Status",
+            value="✅ Search successful",
             inline=False
         )
 
         await message.channel.send(embed=embed)
 
-# =========================================================
+# =====================================================
 # RUN BOT
-# =========================================================
+# =====================================================
 
-client.run(TOKEN)
+client.run(DISCORD_TOKEN)
