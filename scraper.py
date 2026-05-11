@@ -957,8 +957,12 @@ def search_player(name: str) -> tuple[str, str, str] | None:
     """
     url = f"{HLTV_BASE}/search?term={name}"
     html = _fetch(url)
-    print("SEARCH URL:", url)
-    print("SEARCH RESPONSE:", html[:500] if html else "NO HTML")
+    logger.warning(f"SEARCH URL: {url}")
+
+if html:
+    logger.warning(f"SEARCH RESPONSE: {html[:500]}")
+else:
+    logger.warning("SEARCH RESPONSE: NO HTML")
     if not html:
         return None
 
