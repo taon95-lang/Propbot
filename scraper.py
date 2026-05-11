@@ -955,7 +955,7 @@ def search_player(name: str) -> tuple[str, str, str] | None:
     Search HLTV for a player by name.
     Returns (player_id, player_slug, display_name) or None.
     """
-    url = f"{HLTV_BASE}/search?query={name}"
+    url = f"{HLTV_BASE}/search?term={name}"
     html = _fetch(url)
     if not html:
         return None
