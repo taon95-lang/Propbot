@@ -1,4 +1,10 @@
-import re, random, time, logging, os
+import re
+import random
+import time
+import logging
+import os
+import requests
+
 from datetime import date, timedelta
 from bs4 import BeautifulSoup
 
@@ -8,11 +14,32 @@ try:
 except ImportError:
     CFFI_OK = False
 
+# =====================================================
+# LOGGER
+# =====================================================
+
 logger = logging.getLogger(__name__)
+
+# =====================================================
+# HLTV CONFIG
+# =====================================================
+
 HLTV_BASE = "https://www.hltv.org"
-PROFILES = ["chrome116", "safari17_0", "chrome107", "chrome110", "chrome99"]
+
+PROFILES = [
+    "chrome116",
+    "safari17_0",
+    "chrome107",
+    "chrome110",
+    "chrome99"
+]
+
+# =====================================================
+# SESSION STATE
+# =====================================================
 
 class HLTVState:
+
     session = None
     profile_idx = 0
     warmed = False
@@ -21,128 +48,458 @@ class HLTVState:
 
 state = HLTVState()
 
+# =====================================================
+# ROTATE SESSION
+# =====================================================
+
 def _rotate():
-    state.profile_idx = (state.profile_idx + 1) % len(PROFILES)
-    state.session = sess_req.Session(impersonate=PROFILES[state.profile_idx])
+
+    if not CFFI_OK:
+        return None
+
+    state.profile_idx = (
+        (state.profile_idx + 1)
+        % len(PROFILES)
+    )
+
+    state.session = sess_req.Session(
+        impersonate=PROFILES[state.profile_idx]
+    )
+
     state.warmed = False
+
     return state.session
 
-def _fetch(url, referer=None, use_proxy=False):
-    if not CFFI_OK: return None
-    if "/stats/" in url:
-        now = time.time()
-        if "mapstatsid" in url and now < state.mapstats_blocked_until: return None
-        if "mapstatsid" not in url and now < state.stats_blocked_until: return None
+# =====================================================
+# FETCH HTML
+# =====================================================
 
-    if not state.session: _rotate()
-    
-    for _ in range(len(PROFILES)):
-        try:
-            if not state.warmed:
-                state.session.get(HLTV_BASE + "/", timeout=10)
-                state.warmed = True
-            
-            headers = {"Referer": referer or HLTV_BASE + "/"}
-            r = state.session.get(url, timeout=20, headers=headers)
-            
-            if r.status_code == 200 and "Just a moment" not in r.text:
-                return r.text
-            if r.status_code == 403:
-                _rotate()
-                continue
-        except:
+def _fetch(url, referer=None):
+
+    # =============================================
+    # CURL_CFFI
+    # =============================================
+
+    if CFFI_OK:
+
+        if not state.session:
             _rotate()
-    
-    # Optional: ScraperAPI Fallback if environment key exists
-    if os.getenv("SCRAPERAPI_KEY"):
+
+        for _ in range(len(PROFILES)):
+
+            try:
+
+                if not state.warmed:
+
+                    state.session.get(
+                        HLTV_BASE + "/",
+                        timeout=10
+                    )
+
+                    state.warmed = True
+
+                headers = {
+                    "Referer": (
+                        referer
+                        or HLTV_BASE + "/"
+                    )
+                }
+
+                r = state.session.get(
+                    url,
+                    timeout=20,
+                    headers=headers
+                )
+
+                if (
+                    r.status_code == 200
+                    and "Just a moment"
+                    not in r.text
+                ):
+
+                    return r.text
+
+                if r.status_code == 403:
+
+                    _rotate()
+
+                    continue
+
+            except:
+
+                _rotate()
+
+    # =============================================
+    # SCRAPERAPI FALLBACK
+    # =============================================
+
+    scraper_key = os.getenv(
+        "SCRAPERAPI_KEY"
+    )
+
+    if scraper_key:
+
         try:
-            params = {"api_key": os.getenv("SCRAPERAPI_KEY"), "url": url}
-            import requests
-            r = requests.get("https://api.scraperapi.com/", params=params, timeout=30)
-            return r.text if r.status_code == 200 else None
-        except: return None
+
+            params = {
+                "api_key": scraper_key,
+                "url": url
+            }
+
+            r = requests.get(
+                "https://api.scraperapi.com/",
+                params=params,
+                timeout=30
+            )
+
+            if r.status_code == 200:
+                return r.text
+
+        except:
+            pass
+
+    # =============================================
+    # NORMAL REQUEST FALLBACK
+    # =============================================
+
+    try:
+
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 "
+                "(Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 "
+                "(KHTML, like Gecko) "
+                "Chrome/122 Safari/537.36"
+            )
+        }
+
+        r = requests.get(
+            url,
+            headers=headers,
+            timeout=20
+        )
+
+        if r.status_code == 200:
+            return r.text
+
+    except:
+        pass
+
     return None
+
+# =====================================================
+# SEARCH PLAYER
+# =====================================================
 
 def search_player(name, team_hint=None):
-    html = _fetch(f"{HLTV_BASE}/search?query={name}")
-    if not html: return None
-    matches = re.findall(r'/player/(\d+)/([\w-]+)', html)
-    if not matches: return None
-    
-    # Priority: exact name match or first result
-    best = matches[0]
-    for pid, slug in matches:
-        if name.lower().replace(" ", "") in slug.lower():
-            best = (pid, slug)
-            break
-    return best[0], best[1], best[1].replace("-", " ").title()
+
+    search_url = (
+        f"{HLTV_BASE}/search?term={name}"
+    )
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 "
+            "(Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 "
+            "(KHTML, like Gecko) "
+            "Chrome/122 Safari/537.36"
+        )
+    }
+
+    try:
+
+        print(f"SEARCHING PLAYER: {name}")
+        print(f"SEARCH URL: {search_url}")
+
+        r = requests.get(
+            search_url,
+            headers=headers,
+            timeout=20
+        )
+
+        print("STATUS:", r.status_code)
+
+        text = r.text
+
+        print(text[:500])
+
+        # =========================================
+        # FIND PLAYER LINKS
+        # =========================================
+
+        matches = re.findall(
+            r'/player/(\d+)/([\w-]+)',
+            text
+        )
+
+        print("MATCHES:", matches[:5])
+
+        if not matches:
+
+            print("NO PLAYER MATCHES")
+
+            return None
+
+        pid, slug = matches[0]
+
+        display = (
+            slug
+            .replace("-", " ")
+            .title()
+        )
+
+        print(
+            f"FOUND PLAYER: "
+            f"{display} ({pid})"
+        )
+
+        # RETURN:
+        # (player_id, slug, display)
+
+        return (
+            pid,
+            slug,
+            display
+        )
+
+    except Exception as e:
+
+        print("SEARCH ERROR:", e)
+
+        return None
+
+# =====================================================
+# PARSE MAP STATS
+# =====================================================
 
 def parse_map_stats(html, player_slug):
-    soup = BeautifulSoup(html, 'html.parser')
-    slug_norm = re.sub(r'[^a-z0-9]', '', player_slug.lower())
-    
-    # Find player row across any stats table
-    for tr in soup.find_all('tr'):
+
+    soup = BeautifulSoup(
+        html,
+        "html.parser"
+    )
+
+    slug_norm = re.sub(
+        r"[^a-z0-9]",
+        "",
+        player_slug.lower()
+    )
+
+    for tr in soup.find_all("tr"):
+
         row_text = tr.get_text().lower()
-        if slug_norm not in re.sub(r'[^a-z0-9]', '', row_text): continue
-        
-        cells = [c.get_text(strip=True) for c in tr.find_all('td')]
-        stats = {"kills": None, "hs": None, "deaths": None, "rating": None}
-        
+
+        clean_row = re.sub(
+            r"[^a-z0-9]",
+            "",
+            row_text
+        )
+
+        if slug_norm not in clean_row:
+            continue
+
+        cells = [
+            c.get_text(strip=True)
+            for c in tr.find_all("td")
+        ]
+
+        stats = {
+            "kills": None,
+            "hs": None,
+            "deaths": None,
+            "rating": None
+        }
+
         for c in cells:
-            # Pattern: 21 (11) for Kills (HS)
-            khs = re.search(r'(\d+)\s*\((\d+)\)', c)
+
+            # =====================================
+            # KILLS + HS
+            # Example:
+            # 21 (11)
+            # =====================================
+
+            khs = re.search(
+                r"(\d+)\s*\((\d+)\)",
+                c
+            )
+
             if khs:
-                stats["kills"], stats["hs"] = int(khs.group(1)), int(khs.group(2))
-            # Pattern: 15-14 for K-D
-            kd = re.search(r'^(\d+)\s*[-–]\s*(\d+)$', c)
+
+                stats["kills"] = int(
+                    khs.group(1)
+                )
+
+                stats["hs"] = int(
+                    khs.group(2)
+                )
+
+            # =====================================
+            # KD
+            # =====================================
+
+            kd = re.search(
+                r"^(\d+)\s*[-–]\s*(\d+)$",
+                c
+            )
+
             if kd and not stats["kills"]:
-                stats["kills"], stats["deaths"] = int(kd.group(1)), int(kd.group(2))
-            # Pattern: 1.25 for Rating
-            rat = re.match(r'^(\d\.\d{2})$', c)
-            if rat: stats["rating"] = float(rat.group(1))
-            
+
+                stats["kills"] = int(
+                    kd.group(1)
+                )
+
+                stats["deaths"] = int(
+                    kd.group(2)
+                )
+
+            # =====================================
+            # RATING
+            # =====================================
+
+            rat = re.match(
+                r"^(\d\.\d{2})$",
+                c
+            )
+
+            if rat:
+
+                stats["rating"] = float(
+                    rat.group(1)
+                )
+
         return stats
+
     return None
 
-def get_player_data(name, team_hint=None):
-    pid, slug, display = search_player(name)
-    # Get recent match results
-    res_html = _fetch(f"{HLTV_BASE}/results?player={pid}")
-    mids = re.findall(r'/matches/(\d{7,})/([\w-]+)', res_html or "")[:15]
-    
-    all_maps = []
-    for mid, mslug in list(dict.fromkeys(mids))[:10]: # Last 10 BO3s
-        m_html = _fetch(f"{HLTV_BASE}/matches/{mid}/{mslug}")
-        if not m_html or "best of 3" not in m_html.lower(): continue
-        
-        # Extract mapstat IDs to get precise HS% data
-        ms_ids = re.findall(r'/stats/matches/mapstatsid/(\d+)/', m_html)[:2] # Maps 1 & 2
-        for msid in ms_ids:
-            ms_html = _fetch(f"{HLTV_BASE}/stats/matches/mapstatsid/{msid}/proxy", referer=f"{HLTV_BASE}/matches/{mid}/{mslug}")
-            if ms_html:
-                m_data = parse_map_stats(ms_html, slug)
-                if m_data:
-                    m_data.update({"match_id": mid, "map_id": msid})
-                    all_maps.append(m_data)
-        if len(all_maps) >= 20: break
+# =====================================================
+# PLAYER DATA
+# =====================================================
 
-    valid_kills = [m['kills'] for m in all_maps if m['kills'] is not None]
-    if not valid_kills: return None
+def get_player_data(name, team_hint=None):
+
+    player = search_player(name)
+
+    if not player:
+        return None
+
+    pid, slug, display = player
+
+    # =============================================
+    # RECENT RESULTS
+    # =============================================
+
+    res_html = _fetch(
+        f"{HLTV_BASE}/results?player={pid}"
+    )
+
+    if not res_html:
+        return None
+
+    mids = re.findall(
+        r'/matches/(\d{7,})/([\w-]+)',
+        res_html
+    )[:15]
+
+    all_maps = []
+
+    # =============================================
+    # LAST 10 BO3S
+    # =============================================
+
+    for mid, mslug in list(
+        dict.fromkeys(mids)
+    )[:10]:
+
+        match_url = (
+            f"{HLTV_BASE}/matches/"
+            f"{mid}/{mslug}"
+        )
+
+        m_html = _fetch(match_url)
+
+        if not m_html:
+            continue
+
+        if "best of 3" not in m_html.lower():
+            continue
+
+        # =========================================
+        # MAP 1 + 2 ONLY
+        # =========================================
+
+        ms_ids = re.findall(
+            r'/stats/matches/mapstatsid/(\d+)/',
+            m_html
+        )[:2]
+
+        for msid in ms_ids:
+
+            stats_url = (
+                f"{HLTV_BASE}/stats/matches/"
+                f"mapstatsid/{msid}/proxy"
+            )
+
+            ms_html = _fetch(
+                stats_url,
+                referer=match_url
+            )
+
+            if not ms_html:
+                continue
+
+            m_data = parse_map_stats(
+                ms_html,
+                slug
+            )
+
+            if m_data:
+
+                m_data.update({
+                    "match_id": mid,
+                    "map_id": msid
+                })
+
+                all_maps.append(m_data)
+
+        if len(all_maps) >= 20:
+            break
+
+    # =============================================
+    # VALID KILLS
+    # =============================================
+
+    valid_kills = [
+        m["kills"]
+        for m in all_maps
+        if m["kills"] is not None
+    ]
+
+    if not valid_kills:
+        return None
+
+    avg = round(
+        sum(valid_kills)
+        / len(valid_kills),
+        2
+    )
+
+    # =============================================
+    # RETURN
+    # =============================================
 
     return {
         "player": display,
-        "avg": round(sum(valid_kills)/len(valid_kills), 2),
+        "avg": avg,
         "sample": len(valid_kills),
         "maps": all_maps
     }
 
-# Logic for Team Defensive Stats
+# =====================================================
+# TEAM DEFENSE PLACEHOLDER
+# =====================================================
+
 def get_team_conceded(team_name):
-    t_info = _fetch(f"{HLTV_BASE}/search?query={team_name}")
-    tid = re.search(r'/team/(\d+)/', t_info or "")
-    if not tid: return 1.0
-    
-    # Simplified: Higher rank/winrate team = harder to kill (lower adjustment)
-    # In a full build, you'd scrape the last 5 match opponents here.
-    return 0.95 # Default "Tough" placeholder for condensed code
+
+    return 0.95k
