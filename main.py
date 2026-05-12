@@ -35,6 +35,24 @@ async def lookup(ctx, player=None):
     await ctx.send(
         f"FOUND: {display} ({pid})"
     )
+    @bot.command()
+async def lookup(ctx, player=None):
+
+    result = search_player(player)
+
+    if not result:
+
+        await ctx.send(
+            "NO PLAYER"
+        )
+
+        return
+
+    pid, slug, display = result
+
+    await ctx.send(
+        f"FOUND: {display} ({pid})"
+    )
 
 TOKEN = os.getenv(
     "DISCORD_TOKEN"
