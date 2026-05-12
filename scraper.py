@@ -14,11 +14,13 @@ def search_player(name, team_hint=None):
     return None
 
 
-def get_player_data(player, opponent=None):
+from curl_cffi import requests
 
-    print(
-        "GET PLAYER DATA RUNNING"
-    )
+SESSION = requests.Session(
+    impersonate="chrome110"
+)
+
+def get_player_data(player, opponent=None):
 
     result = search_player(player)
 
@@ -27,29 +29,53 @@ def get_player_data(player, opponent=None):
 
     pid, slug, display = result
 
+    url = (
+        f"https://www.hltv.org/results?player={pid}"
+    )
+
+    print(
+        "REQUESTING:",
+        url
+    )
+
+    try:
+
+        r = SESSION.get(
+            url,
+            timeout=20
+        )
+
+        print(
+            "STATUS:",
+            r.status_code
+        )
+
+        print(
+            r.text[:1000]
+        )
+
+    except Exception as e:
+
+        print(
+            "ERROR:",
+            e
+        )
+
+        return None
+
     return {
 
         "player": display,
 
-        "avg": 32.7,
+        "avg": 1,
 
-        "avg_hs": 14.2,
+        "avg_hs": 1,
 
-        "avg_rating": 1.25,
+        "avg_rating": 1,
 
-        "sample": 10,
+        "sample": 1,
 
         "maps": [
-
-            {"kills": 34},
-            {"kills": 29},
-            {"kills": 31},
-            {"kills": 38},
-            {"kills": 27},
-            {"kills": 36},
-            {"kills": 33},
-            {"kills": 30},
-            {"kills": 41},
-            {"kills": 28},
+            {"kills": 1}
         ]
     }
