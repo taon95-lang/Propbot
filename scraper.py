@@ -9,6 +9,13 @@ def search_player(name, team_hint=None):
         )
 
     return None
+from curl_cffi import requests
+import re
+
+SESSION = requests.Session(
+    impersonate="chrome110"
+)
+
 def get_player_data(player, opponent=None):
 
     result = search_player(player)
@@ -18,29 +25,64 @@ def get_player_data(player, opponent=None):
 
     pid, slug, display = result
 
+    results_url = (
+        f"https://www.hltv.org/results?player={pid}"
+    )
+
+    print(
+        "RESULTS URL:",
+        results_url
+    )
+
+    try:
+
+        r = SESSION.get(
+            results_url,
+            timeout=20
+        )
+
+        html = r.text
+
+        print(
+            "RESULTS STATUS:",
+            r.status_code
+        )
+
+    except Exception as e:
+
+        print(
+            "REQUEST ERROR:",
+            e
+        )
+
+        return None
+
+    match_links = re.findall(
+        r'/matches/(\d+)/([\w-]+)',
+        html
+    )
+
+    print(
+        "MATCH LINKS:",
+        match_links[:10]
+    )
+
+    if not match_links:
+        return None
+
     return {
 
         "player": display,
 
-        "avg": 32.7,
+        "avg": 0,
 
-        "avg_hs": 14.2,
+        "avg_hs": 0,
 
-        "avg_rating": 1.25,
+        "avg_rating": 0,
 
-        "sample": 10,
+        "sample": len(match_links),
 
         "maps": [
-
-            {"kills": 34},
-            {"kills": 29},
-            {"kills": 31},
-            {"kills": 38},
-            {"kills": 27},
-            {"kills": 36},
-            {"kills": 33},
-            {"kills": 30},
-            {"kills": 41},
-            {"kills": 28},
+            {"kills": 0}
         ]
     }
