@@ -2,8 +2,6 @@ import os
 import discord
 from discord.ext import commands
 
-from scraper import get_player_data
-
 intents = discord.Intents.default()
 intents.message_content = True
 
@@ -15,32 +13,16 @@ bot = commands.Bot(
 @bot.event
 async def on_ready():
 
-    print("BOT ONLINE")
+    print("BOT ONLINE SUCCESS")
 
 @bot.command()
-async def grade(ctx, player=None, line=None, opponent=None):
+async def test(ctx):
 
-    print("COMMAND HIT")
+    print("TEST COMMAND HIT")
 
     await ctx.send(
-        f"Testing {player}"
+        "TEST WORKING"
     )
-
-    print("RUNNING GET_PLAYER_DATA")
-
-    data = get_player_data(player)
-
-    print("SCRAPER RETURN:", data)
-
-    if not data:
-
-        await ctx.send(
-            "❌ No player data found."
-        )
-
-        return
-
-    await ctx.send(data)
 
 TOKEN = os.getenv(
     "DISCORD_TOKEN"
