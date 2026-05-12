@@ -1,5 +1,5 @@
 import re
-import requests
+from curl_cffi import request 
 from bs4 import BeautifulSoup
 
 # =====================================================
