@@ -1,3 +1,9 @@
+from curl_cffi import requests
+
+SESSION = requests.Session(
+    impersonate="chrome110"
+)
+
 def search_player(name, team_hint=None):
 
     if not name:
@@ -14,18 +20,6 @@ def search_player(name, team_hint=None):
     return None
 
 
-from curl_cffi import requests
-
-SESSION = requests.Session(
-    impersonate="chrome110"
-)
-
-from curl_cffi import requests
-
-SESSION = requests.Session(
-    impersonate="chrome110"
-)
-
 def get_player_data(player, opponent=None):
 
     result = search_player(player)
@@ -39,59 +33,45 @@ def get_player_data(player, opponent=None):
         f"https://www.hltv.org/results?player={pid}"
     )
 
-    print(
-        "REQUESTING:",
-        url
-    )
-
     try:
 
         headers = {
 
-    "User-Agent": (
-        "Mozilla/5.0 "
-        "(Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 "
-        "(KHTML, like Gecko) "
-        "Chrome/122.0.0.0 "
-        "Safari/537.36"
-    ),
+            "User-Agent": (
+                "Mozilla/5.0 "
+                "(Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 "
+                "(KHTML, like Gecko) "
+                "Chrome/122.0.0.0 "
+                "Safari/537.36"
+            ),
 
-    "Accept": (
-        "text/html,"
-        "application/xhtml+xml,"
-        "application/xml;q=0.9,"
-        "image/avif,image/webp,*/*;q=0.8"
-    ),
+            "Accept": (
+                "text/html,"
+                "application/xhtml+xml,"
+                "application/xml;q=0.9,"
+                "image/avif,image/webp,*/*;q=0.8"
+            ),
 
-    "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Language": "en-US,en;q=0.9",
 
-    "Referer": "https://www.hltv.org/",
+            "Referer": "https://www.hltv.org/",
 
-    "Connection": "keep-alive"
-}
+            "Connection": "keep-alive"
+        }
 
-SESSION.get(
-    "https://www.hltv.org",
-    headers=headers
-)
+        SESSION.get(
+            "https://www.hltv.org",
+            headers=headers
+        )
 
-r = SESSION.get(
-    url,
-    headers=headers,
-    timeout=20
-)
-
-        print(
-            "STATUS:",
-            r.status_code
+        r = SESSION.get(
+            url,
+            headers=headers,
+            timeout=20
         )
 
         html = r.text
-
-        print(
-            html[:1000]
-        )
 
     except Exception as e:
 
