@@ -502,4 +502,4 @@ def get_player_data(name, team_hint=None):
 
 def get_team_conceded(team_name):
 
-    return 0.95k
+    return 0.95
