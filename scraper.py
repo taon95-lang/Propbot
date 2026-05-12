@@ -42,6 +42,7 @@ def get_player_data(player, opponent=None):
         )
 
         html = r.text
+        print(html[:2000])
 
         print(
             "RESULTS STATUS:",
