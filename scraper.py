@@ -361,33 +361,29 @@ def get_player_data(name, team_hint=None):
 
             try:
 
-                stats_r = requests.get(
-                    stats_url,
-                    headers=HEADERS,
-                    timeout=20
-                )
+    stats_r = requests.get(
+        stats_url,
+        headers=HEADERS,
+        timeout=20
+    )
 
-                stats_html = stats_r.text
+    stats_html = stats_r.text
 
-            except Exception as e:
+    parsed = parse_map_stats(
+        stats_html,
+        slug
+    )
 
-                print(
-                    "MAPSTATS ERROR:",
-                    e
-                )
+    print("PARSED:", parsed)
 
-                continue
+except Exception as e:
 
-            # =====================================
-            # PARSE REAL STATS
-            # =====================================
+    print(
+        "MAPSTATS ERROR:",
+        e
+    )
 
-            parsed = parse_map_stats(
-                print("PARSED:", parsed)
-                stats_html,
-                slug
-            )
-
+    continue
             if parsed:
 
                 parsed.update({
