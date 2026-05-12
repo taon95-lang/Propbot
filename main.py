@@ -1,3 +1,4 @@
+import os
 import discord
 from discord.ext import commands
 
@@ -7,7 +8,7 @@ from scraper import (
 )
 
 # =====================================================
-# DISCORD BOT
+# DISCORD SETUP
 # =====================================================
 
 intents = discord.Intents.default()
@@ -34,7 +35,12 @@ async def on_ready():
 # =====================================================
 
 @bot.command()
-async def grade(ctx, player=None, line=None, opponent=None):
+async def grade(
+    ctx,
+    player=None,
+    line=None,
+    opponent=None
+):
 
     # =============================================
     # VALIDATION
@@ -48,10 +54,6 @@ async def grade(ctx, player=None, line=None, opponent=None):
 
         return
 
-    # =============================================
-    # START
-    # =============================================
-
     await ctx.send(
         f"🔎 Grading {player} vs {opponent}..."
     )
@@ -64,15 +66,30 @@ async def grade(ctx, player=None, line=None, opponent=None):
     # SCRAPER
     # =============================================
 
-    data = get_player_data(
-        player,
-        opponent
-    )
+    try:
 
-    print(
-        "SCRAPER RETURN:",
-        data
-    )
+        data = get_player_data(
+            player,
+            opponent
+        )
+
+        print(
+            "SCRAPER RETURN:",
+            data
+        )
+
+    except Exception as e:
+
+        print(
+            "SCRAPER ERROR:",
+            e
+        )
+
+        await ctx.send(
+            f"❌ Scraper error:\n{e}"
+        )
+
+        return
 
     # =============================================
     # NO DATA
@@ -87,10 +104,10 @@ async def grade(ctx, player=None, line=None, opponent=None):
         return
 
     # =============================================
-    # REAL DATA
+    # DATA
     # =============================================
 
-    avg = data["avg"]
+    avg = data.get("avg", 0)
 
     avg_hs = data.get(
         "avg_hs",
@@ -123,7 +140,7 @@ async def grade(ctx, player=None, line=None, opponent=None):
     )
 
     # =============================================
-    # HIT RATE
+    # LINE
     # =============================================
 
     try:
@@ -138,14 +155,27 @@ async def grade(ctx, player=None, line=None, opponent=None):
 
         return
 
+    # =============================================
+    # RECENT MAPS
+    # =============================================
+
     recent_kills = [
+
         m["kills"]
+
         for m in maps
+
         if m.get("kills") is not None
     ]
 
+    # =============================================
+    # HIT RATE
+    # =============================================
+
     hits = len([
+
         k for k in recent_kills
+
         if k > line_float
     ])
 
@@ -154,7 +184,9 @@ async def grade(ctx, player=None, line=None, opponent=None):
     if recent_kills:
 
         hit_rate = round(
-            (hits / len(recent_kills)) * 100,
+            (
+                hits / len(recent_kills)
+            ) * 100,
             1
         )
 
@@ -168,7 +200,7 @@ async def grade(ctx, player=None, line=None, opponent=None):
     )
 
     # =============================================
-    # DECISION
+    # DECISION ENGINE
     # =============================================
 
     if edge >= 3:
@@ -202,11 +234,13 @@ async def grade(ctx, player=None, line=None, opponent=None):
         grade_letter = "C"
 
     # =============================================
-    # RECENT MAPS
+    # RECENT MAPS STRING
     # =============================================
 
     recent_maps = ", ".join([
+
         str(k)
+
         for k in recent_kills[:10]
     ])
 
@@ -214,7 +248,9 @@ async def grade(ctx, player=None, line=None, opponent=None):
     # HLTV LINK
     # =============================================
 
-    player_lookup = search_player(player)
+    player_lookup = search_player(
+        player
+    )
 
     hltv_link = "N/A"
 
@@ -234,7 +270,8 @@ async def grade(ctx, player=None, line=None, opponent=None):
     embed = discord.Embed(
 
         title=(
-            f"🎯 {player.upper()} "
+            f"🎯 "
+            f"{player.upper()} "
             f"PROP GRADE"
         ),
 
@@ -336,6 +373,12 @@ async def grade(ctx, player=None, line=None, opponent=None):
 # TOKEN
 # =====================================================
 
-TOKEN = "MTQ4NzU1NDY3Nzk5NzU3MjM2OQ.GZMJMF._vRtF2up3q64ieRKpjIDF61dLgcWvJc2ezEGNM"
+TOKEN = os.getenv(
+    "DISCORD_TOKEN"
+)
+
+# =====================================================
+# RUN BOT
+# =====================================================
 
 bot.run(TOKEN)
