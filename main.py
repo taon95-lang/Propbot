@@ -1,5 +1,5 @@
 import discord
-import os
+from discord.ext import commands
 
 from scraper import (
     search_player,
@@ -7,19 +7,14 @@ from scraper import (
 )
 
 # =====================================================
-# TOKEN
-# =====================================================
-
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-
-# =====================================================
-# DISCORD SETUP
+# DISCORD BOT
 # =====================================================
 
 intents = discord.Intents.default()
 intents.message_content = True
 
-client = discord.Client(
+bot = commands.Bot(
+    command_prefix="!",
     intents=intents
 )
 
@@ -27,342 +22,320 @@ client = discord.Client(
 # READY
 # =====================================================
 
-@client.event
+@bot.event
 async def on_ready():
 
     print(
-        f"✅ Logged in as {client.user}"
+        f"✅ Logged in as {bot.user}"
     )
 
 # =====================================================
-# MESSAGE HANDLER
+# GRADE COMMAND
 # =====================================================
 
-@client.event
-async def on_message(message):
+@bot.command()
+async def grade(ctx, player=None, line=None, opponent=None):
 
-    if message.author == client.user:
+    # =============================================
+    # VALIDATION
+    # =============================================
+
+    if not player or not line:
+
+        await ctx.send(
+            "Usage: !grade player line opponent"
+        )
+
         return
 
-    content = message.content.lower()
+    # =============================================
+    # START
+    # =============================================
 
-    # =================================================
-    # !PING
-    # =================================================
+    await ctx.send(
+        f"🔎 Grading {player} vs {opponent}..."
+    )
 
-    if content == "!ping":
+    print(
+        "RUNNING GET_PLAYER_DATA"
+    )
 
-        await message.channel.send(
-            "🏓 pong"
+    # =============================================
+    # SCRAPER
+    # =============================================
+
+    data = get_player_data(
+        player,
+        opponent
+    )
+
+    print(
+        "SCRAPER RETURN:",
+        data
+    )
+
+    # =============================================
+    # NO DATA
+    # =============================================
+
+    if not data:
+
+        await ctx.send(
+            "❌ No player data found."
         )
 
-    # =================================================
-    # !GRADE
-    # Example:
-    # !grade donk 32.5 spirit
-    # =================================================
+        return
 
-    elif content.startswith("!grade"):
+    # =============================================
+    # REAL DATA
+    # =============================================
 
-        args = message.content.split()
+    avg = data["avg"]
 
-        if len(args) < 4:
+    avg_hs = data.get(
+        "avg_hs",
+        0
+    )
 
-            await message.channel.send(
-                "Usage: !grade player line opponent"
-            )
+    avg_rating = data.get(
+        "avg_rating",
+        0
+    )
 
-            return
+    avg_adr = data.get(
+        "avg_adr",
+        0
+    )
 
-        # =============================================
-        # INPUTS
-        # =============================================
+    avg_kast = data.get(
+        "avg_kast",
+        0
+    )
 
-        player_name = args[1]
+    sample = data.get(
+        "sample",
+        0
+    )
 
-        try:
+    maps = data.get(
+        "maps",
+        []
+    )
 
-            line = float(args[2])
+    # =============================================
+    # HIT RATE
+    # =============================================
 
-        except:
+    try:
 
-            await message.channel.send(
-                "❌ Invalid line."
-            )
+        line_float = float(line)
 
-            return
+    except:
 
-        opponent = " ".join(args[3:])
-
-        # =============================================
-        # START MESSAGE
-        # =============================================
-
-        await message.channel.send(
-            (
-                f"🔎 Grading "
-                f"{player_name} vs {opponent}..."
-            )
+        await ctx.send(
+            "❌ Invalid line."
         )
 
-        # =============================================
-        # SCRAPER
-        # =============================================
+        return
 
-        try:
+    recent_kills = [
+        m["kills"]
+        for m in maps
+        if m.get("kills") is not None
+    ]
 
-            data = get_player_data(
-                player_name
-            )
+    hits = len([
+        k for k in recent_kills
+        if k > line_float
+    ])
 
-        except Exception as e:
+    hit_rate = 0
 
-            await message.channel.send(
-                f"❌ Scraper error:\n{e}"
-            )
-
-            return
-
-        # =============================================
-        # NO DATA
-        # =============================================
-
-        if not data:
-
-            await message.channel.send(
-                "❌ No player data found."
-            )
-
-            return
-
-        # =============================================
-        # PLAYER DATA
-        # =============================================
-
-        avg = data["avg"]
-
-        sample = data["sample"]
-
-        maps = data["maps"]
-
-        kills_list = [
-            m["kills"]
-            for m in maps
-            if m["kills"] is not None
-        ]
-
-        hs_list = [
-            m["hs"]
-            for m in maps
-            if m["hs"] is not None
-        ]
-
-        rating_list = [
-            m["rating"]
-            for m in maps
-            if m["rating"] is not None
-        ]
-
-        # =============================================
-        # PROJECTIONS
-        # =============================================
-
-        edge = round(
-            avg - line,
-            2
-        )
-
-        hit_count = len([
-            k for k in kills_list
-            if k > line
-        ])
+    if recent_kills:
 
         hit_rate = round(
-            (
-                hit_count
-                / len(kills_list)
-            ) * 100,
+            (hits / len(recent_kills)) * 100,
             1
-        ) if kills_list else 0
-
-        avg_hs = round(
-            (
-                sum(hs_list)
-                / len(hs_list)
-            ),
-            2
-        ) if hs_list else 0
-
-        avg_rating = round(
-            (
-                sum(rating_list)
-                / len(rating_list)
-            ),
-            2
-        ) if rating_list else 0
-
-        # =============================================
-        # DECISION ENGINE
-        # =============================================
-
-        if edge >= 4:
-
-            decision = "OVER"
-
-            grade = "A"
-
-        elif edge >= 2:
-
-            decision = "OVER LEAN"
-
-            grade = "B"
-
-        elif edge <= -4:
-
-            decision = "UNDER"
-
-            grade = "A"
-
-        elif edge <= -2:
-
-            decision = "UNDER LEAN"
-
-            grade = "B"
-
-        else:
-
-            decision = "NO BET"
-
-            grade = "C"
-
-        # =============================================
-        # RECENT MAPS
-        # =============================================
-
-        recent_maps = (
-            ", ".join(
-                str(k)
-                for k in kills_list[:10]
-            )
-            if kills_list
-            else "N/A"
         )
 
-        # =============================================
-        # HLTV LINK
-        # =============================================
+    # =============================================
+    # EDGE
+    # =============================================
 
-        player = search_player(
-            player_name
+    edge = round(
+        avg - line_float,
+        2
+    )
+
+    # =============================================
+    # DECISION
+    # =============================================
+
+    if edge >= 3:
+
+        decision = "OVER"
+
+        grade_letter = "A"
+
+    elif edge >= 1:
+
+        decision = "LEAN OVER"
+
+        grade_letter = "B"
+
+    elif edge <= -3:
+
+        decision = "UNDER"
+
+        grade_letter = "A"
+
+    elif edge <= -1:
+
+        decision = "LEAN UNDER"
+
+        grade_letter = "B"
+
+    else:
+
+        decision = "NO BET"
+
+        grade_letter = "C"
+
+    # =============================================
+    # RECENT MAPS
+    # =============================================
+
+    recent_maps = ", ".join([
+        str(k)
+        for k in recent_kills[:10]
+    ])
+
+    # =============================================
+    # HLTV LINK
+    # =============================================
+
+    player_lookup = search_player(player)
+
+    hltv_link = "N/A"
+
+    if player_lookup:
+
+        pid, slug, display = player_lookup
+
+        hltv_link = (
+            f"https://www.hltv.org/player/"
+            f"{pid}/{slug}"
         )
 
-        hltv_link = "N/A"
+    # =============================================
+    # EMBED
+    # =============================================
 
-        if player:
+    embed = discord.Embed(
 
-            pid = player[0]
+        title=(
+            f"🎯 {player.upper()} "
+            f"PROP GRADE"
+        ),
 
-            slug = player[1]
+        color=0x00ff00
+    )
 
-            hltv_link = (
-                f"https://www.hltv.org/player/"
-                f"{pid}/{slug}"
-            )
+    embed.add_field(
+        name="👤 Player",
+        value=player,
+        inline=False
+    )
 
-        # =============================================
-        # EMBED
-        # =============================================
+    embed.add_field(
+        name="⚔️ Opponent",
+        value=opponent,
+        inline=False
+    )
 
-        embed = discord.Embed(
-            title=(
-                f"🎯 "
-                f"{player_name.upper()} "
-                f"PROP GRADE"
-            ),
-            color=0x00ff00
-        )
+    embed.add_field(
+        name="🎯 Line",
+        value=line,
+        inline=False
+    )
 
-        embed.add_field(
-            name="👤 Player",
-            value=player_name,
-            inline=True
-        )
+    embed.add_field(
+        name="📊 Avg Kills",
+        value=avg,
+        inline=False
+    )
 
-        embed.add_field(
-            name="⚔ Opponent",
-            value=opponent,
-            inline=True
-        )
+    embed.add_field(
+        name="📈 Edge",
+        value=edge,
+        inline=False
+    )
 
-        embed.add_field(
-            name="🎯 Line",
-            value=str(line),
-            inline=True
-        )
+    embed.add_field(
+        name="🏆 Decision",
+        value=(
+            f"{decision} "
+            f"({grade_letter})"
+        ),
+        inline=False
+    )
 
-        embed.add_field(
-            name="📊 Avg Kills",
-            value=str(avg),
-            inline=True
-        )
+    embed.add_field(
+        name="🔥 Hit Rate",
+        value=f"{hit_rate}%",
+        inline=False
+    )
 
-        embed.add_field(
-            name="📈 Edge",
-            value=str(edge),
-            inline=True
-        )
+    embed.add_field(
+        name="💥 Avg HS",
+        value=avg_hs,
+        inline=False
+    )
 
-        embed.add_field(
-            name="🏆 Decision",
-            value=(
-                f"{decision} "
-                f"({grade})"
-            ),
-            inline=True
-        )
+    embed.add_field(
+        name="⭐ Avg Rating",
+        value=avg_rating,
+        inline=False
+    )
 
-        embed.add_field(
-            name="🔥 Hit Rate",
-            value=f"{hit_rate}%",
-            inline=True
-        )
+    embed.add_field(
+        name="🎯 ADR",
+        value=avg_adr,
+        inline=False
+    )
 
-        embed.add_field(
-            name="💥 Avg HS",
-            value=str(avg_hs),
-            inline=True
-        )
+    embed.add_field(
+        name="🛡️ KAST",
+        value=avg_kast,
+        inline=False
+    )
 
-        embed.add_field(
-            name="⭐ Avg Rating",
-            value=str(avg_rating),
-            inline=True
-        )
+    embed.add_field(
+        name="🧪 Sample",
+        value=sample,
+        inline=False
+    )
 
-        embed.add_field(
-            name="🧪 Sample",
-            value=str(sample),
-            inline=True
-        )
+    embed.add_field(
+        name="📋 Recent Maps",
+        value=recent_maps,
+        inline=False
+    )
 
-        embed.add_field(
-            name="📋 Recent Maps",
-            value=recent_maps,
-            inline=False
-        )
+    embed.add_field(
+        name="🔗 HLTV",
+        value=hltv_link,
+        inline=False
+    )
 
-        embed.add_field(
-            name="🔗 HLTV",
-            value=hltv_link,
-            inline=False
-        )
-
-        await message.channel.send(
-            embed=embed
-        )
+    await ctx.send(
+        embed=embed
+    )
 
 # =====================================================
-# RUN BOT
+# TOKEN
 # =====================================================
 
-client.run(DISCORD_TOKEN)
+TOKEN = "MTQ4NzU1NDY3Nzk5NzU3MjM2OQ.GZMJMF._vRtF2up3q64ieRKpjIDF61dLgcWvJc2ezEGNM"
+
+bot.run(TOKEN)
