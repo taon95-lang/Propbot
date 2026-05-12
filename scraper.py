@@ -11,7 +11,7 @@ from bs4 import BeautifulSoup
 logger = logging.getLogger(__name__)
 
 # =====================================================
-# HLTV
+# HLTV CONFIG
 # =====================================================
 
 HLTV_BASE = "https://www.hltv.org"
@@ -27,7 +27,7 @@ HEADERS = {
 }
 
 # =====================================================
-# SEARCH PLAYER
+# PLAYER SEARCH
 # =====================================================
 
 def search_player(name, team_hint=None):
@@ -44,11 +44,11 @@ def search_player(name, team_hint=None):
             timeout=20
         )
 
-        text = r.text
+        html = r.text
 
         matches = re.findall(
             r"/player/(\d+)/([\w-]+)",
-            text
+            html
         )
 
         if not matches:
@@ -70,12 +70,15 @@ def search_player(name, team_hint=None):
 
     except Exception as e:
 
-        print("SEARCH ERROR:", e)
+        print(
+            "SEARCH ERROR:",
+            e
+        )
 
         return None
 
 # =====================================================
-# PARSE REAL MAP STATS
+# PARSE MAP STATS
 # =====================================================
 
 def parse_map_stats(stats_html, player_slug):
@@ -91,9 +94,9 @@ def parse_map_stats(stats_html, player_slug):
         player_slug.lower()
     )
 
-    all_rows = soup.find_all("tr")
+    rows = soup.find_all("tr")
 
-    for row in all_rows:
+    for row in rows:
 
         row_text = row.get_text(
             " ",
@@ -149,7 +152,7 @@ def parse_map_stats(stats_html, player_slug):
                 )
 
             # =========================================
-            # K-D
+            # KD
             # Example:
             # 23-14
             # =========================================
@@ -234,14 +237,10 @@ def parse_map_stats(stats_html, player_slug):
     return None
 
 # =====================================================
-# GET REAL PLAYER DATA
+# GET PLAYER DATA
 # =====================================================
 
 def get_player_data(name, team_hint=None):
-
-    # =============================================
-    # PLAYER SEARCH
-    # =============================================
 
     player = search_player(name)
 
@@ -270,12 +269,15 @@ def get_player_data(name, team_hint=None):
 
     except Exception as e:
 
-        print("RESULTS ERROR:", e)
+        print(
+            "RESULTS ERROR:",
+            e
+        )
 
         return None
 
     # =============================================
-    # RECENT MATCH LINKS
+    # MATCH LINKS
     # =============================================
 
     match_links = re.findall(
@@ -286,8 +288,11 @@ def get_player_data(name, team_hint=None):
     match_links = list(
         dict.fromkeys(match_links)
     )
-    print("MATCH LINKS:", match_links[:5])
-    
+
+    print(
+        "MATCH LINKS:",
+        match_links[:5]
+    )
 
     if not match_links:
         return None
@@ -295,7 +300,7 @@ def get_player_data(name, team_hint=None):
     all_maps = []
 
     # =============================================
-    # RECENT BO3S ONLY
+    # RECENT MATCHES
     # =============================================
 
     for match_id, match_slug in match_links[:10]:
@@ -317,19 +322,22 @@ def get_player_data(name, team_hint=None):
 
         except Exception as e:
 
-            print("MATCH ERROR:", e)
+            print(
+                "MATCH ERROR:",
+                e
+            )
 
             continue
 
         # =========================================
-        # BO3 FILTER
+        # BO3 ONLY
         # =========================================
 
         if "best of 3" not in match_html.lower():
             continue
 
         # =========================================
-        # MAPSTATS IDS
+        # MAP IDS
         # =========================================
 
         map_ids = re.findall(
@@ -340,16 +348,20 @@ def get_player_data(name, team_hint=None):
         map_ids = list(
             dict.fromkeys(map_ids)
         )
-        print("MAP IDS:", map_ids)
+
+        print(
+            "MAP IDS:",
+            map_ids
+        )
 
         # =========================================
-        # MAPS 1–2 ONLY
+        # MAPS 1-2 ONLY
         # =========================================
 
         map_ids = map_ids[:2]
 
         # =========================================
-        # OPEN MAPSTATS PAGE
+        # MAPSTATS PAGE
         # =========================================
 
         for map_id in map_ids:
@@ -359,31 +371,35 @@ def get_player_data(name, team_hint=None):
                 f"mapstatsid/{map_id}/match"
             )
 
-        try:
+            try:
 
-    stats_r = requests.get(
-        stats_url,
-        headers=HEADERS,
-        timeout=20
-    )
+                stats_r = requests.get(
+                    stats_url,
+                    headers=HEADERS,
+                    timeout=20
+                )
 
-    stats_html = stats_r.text
+                stats_html = stats_r.text
 
-    parsed = parse_map_stats(
-        stats_html,
-        slug
-    )
+                parsed = parse_map_stats(
+                    stats_html,
+                    slug
+                )
 
-    print("PARSED:", parsed)
+                print(
+                    "PARSED:",
+                    parsed
+                )
 
-except Exception as e:
+            except Exception as e:
 
-    print(
-        "MAPSTATS ERROR:",
-        e
-    )
+                print(
+                    "MAPSTATS ERROR:",
+                    e
+                )
 
-    continue
+                continue
+
             if parsed:
 
                 parsed.update({
@@ -393,17 +409,19 @@ except Exception as e:
                     "map_id": map_id
                 })
 
-                all_maps.append(parsed)
+                all_maps.append(
+                    parsed
+                )
 
         if len(all_maps) >= 20:
             break
 
-    # =============================================
-    # NO REAL DATA
-    # =============================================
+    print(
+        "TOTAL MAPS:",
+        len(all_maps)
+    )
 
     if not all_maps:
-        print("TOTAL MAPS:", len(all_maps))
         return None
 
     # =============================================
@@ -474,7 +492,7 @@ except Exception as e:
     ) if valid_kast else 0
 
     # =============================================
-    # RETURN REAL DATA
+    # RETURN
     # =============================================
 
     return {
