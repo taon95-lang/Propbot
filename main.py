@@ -19,7 +19,7 @@ intents.message_content = True
 client = discord.Client(intents=intents)
 
 # =====================================================
-# BOT ONLINE
+# READY
 # =====================================================
 
 @client.event
@@ -28,7 +28,7 @@ async def on_ready():
     print(f"✅ Logged in as {client.user}")
 
 # =====================================================
-# COMMANDS
+# MESSAGES
 # =====================================================
 
 @client.event
@@ -40,7 +40,7 @@ async def on_message(message):
     content = message.content.lower()
 
     # =================================================
-    # !PING
+    # PING
     # =================================================
 
     if content == "!ping":
@@ -48,28 +48,40 @@ async def on_message(message):
         await message.channel.send("🏓 pong")
 
     # =================================================
-    # !GRADE
+    # GRADE
     # =================================================
 
     elif content.startswith("!grade"):
 
+        args = message.content.split()
+
+        if len(args) < 4:
+
+            await message.channel.send(
+                "Usage: !grade player line opponent"
+            )
+
+            return
+
+        player_name = args[1]
+        line = args[2]
+        opponent = " ".join(args[3:])
+
         await message.channel.send(
-            "🔍 Running HLTV scraper test..."
+            f"🔍 Searching HLTV for {player_name}..."
         )
 
         # =============================================
-        # FORCE DONK TEST
+        # SEARCH PLAYER
         # =============================================
 
         try:
 
-            player = search_player("donk")
-
-            print("PLAYER RESULT:", player)
+            player = search_player(player_name)
 
         except Exception as e:
 
-            print("SCRAPER ERROR:", e)
+            print("SEARCH ERROR:", e)
 
             await message.channel.send(
                 f"❌ Scraper crashed:\n{e}"
@@ -78,10 +90,10 @@ async def on_message(message):
             return
 
         # =============================================
-        # FAILED
+        # PLAYER NOT FOUND
         # =============================================
 
-        if player is None:
+        if not player:
 
             await message.channel.send(
                 "❌ Player not found on HLTV"
@@ -90,17 +102,12 @@ async def on_message(message):
             return
 
         # =============================================
-        # SCRAPER RETURNS:
-        # (player_id, slug, display_name)
+        # PLAYER DATA
         # =============================================
 
         player_id = player[0]
         player_slug = player[1]
         player_display = player[2]
-
-        # =============================================
-        # HLTV URL
-        # =============================================
 
         hltv_url = (
             f"https://www.hltv.org/player/"
@@ -112,7 +119,7 @@ async def on_message(message):
         # =============================================
 
         embed = discord.Embed(
-            title="🎯 HLTV SCRAPER WORKING",
+            title="🎯 HLTV PLAYER FOUND",
             color=0x00ff00
         )
 
@@ -123,27 +130,27 @@ async def on_message(message):
         )
 
         embed.add_field(
-            name="🆔 HLTV ID",
-            value=player_id,
+            name="🎯 Line",
+            value=line,
             inline=False
         )
 
         embed.add_field(
-            name="🔗 Profile",
+            name="⚔ Opponent",
+            value=opponent,
+            inline=False
+        )
+
+        embed.add_field(
+            name="🔗 HLTV",
             value=hltv_url,
-            inline=False
-        )
-
-        embed.add_field(
-            name="📡 Status",
-            value="✅ Search successful",
             inline=False
         )
 
         await message.channel.send(embed=embed)
 
 # =====================================================
-# RUN BOT
+# RUN
 # =====================================================
 
 client.run(DISCORD_TOKEN)
