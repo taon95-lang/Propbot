@@ -1,14 +1,6 @@
 import re
 import requests
-import logging
-
 from bs4 import BeautifulSoup
-
-# =====================================================
-# LOGGER
-# =====================================================
-
-logger = logging.getLogger(__name__)
 
 # =====================================================
 # HLTV CONFIG
@@ -27,34 +19,84 @@ HEADERS = {
 }
 
 # =====================================================
-# PLAYER SEARCH
+# SEARCH PLAYER
 # =====================================================
 
 def search_player(name, team_hint=None):
 
-    search_url = (
-        f"{HLTV_BASE}/search?term={name}"
-    )
-
     try:
 
+        url = (
+            f"{HLTV_BASE}/search?term={name}"
+        )
+
         r = requests.get(
-            search_url,
+            url,
             headers=HEADERS,
-            timeout=20
+            timeout=20,
+            allow_redirects=True
         )
 
         html = r.text
 
+        print(
+            "SEARCH HTML LENGTH:",
+            len(html)
+        )
+
+        # =========================================
+        # PLAYER LINKS
+        # =========================================
+
         matches = re.findall(
-            r"/player/(\d+)/([\w-]+)",
+            r'/player/(\d+)/([\w-]+)',
             html
+        )
+
+        print(
+            "RAW MATCHES:",
+            matches[:10]
         )
 
         if not matches:
             return None
 
-        pid, slug = matches[0]
+        # =========================================
+        # REMOVE DUPLICATES
+        # =========================================
+
+        matches = list(
+            dict.fromkeys(matches)
+        )
+
+        # =========================================
+        # BEST MATCH
+        # =========================================
+
+        best = matches[0]
+
+        name_clean = (
+            name.lower()
+            .replace(" ", "")
+        )
+
+        for pid, slug in matches:
+
+            slug_clean = (
+                slug.lower()
+                .replace("-", "")
+            )
+
+            if name_clean in slug_clean:
+
+                best = (
+                    pid,
+                    slug
+                )
+
+                break
+
+        pid, slug = best
 
         display = (
             slug
@@ -81,10 +123,10 @@ def search_player(name, team_hint=None):
 # PARSE MAP STATS
 # =====================================================
 
-def parse_map_stats(stats_html, player_slug):
+def parse_map_stats(html, player_slug):
 
     soup = BeautifulSoup(
-        stats_html,
+        html,
         "html.parser"
     )
 
@@ -94,9 +136,7 @@ def parse_map_stats(stats_html, player_slug):
         player_slug.lower()
     )
 
-    rows = soup.find_all("tr")
-
-    for row in rows:
+    for row in soup.find_all("tr"):
 
         row_text = row.get_text(
             " ",
@@ -112,29 +152,25 @@ def parse_map_stats(stats_html, player_slug):
         if slug_clean not in row_clean:
             continue
 
-        cells = row.find_all("td")
-
         stats = {
             "kills": None,
             "deaths": None,
             "hs": None,
             "rating": None,
             "adr": None,
-            "kast": None
+            "kast": None,
         }
 
-        for cell in cells:
+        for cell in row.find_all("td"):
 
             txt = cell.get_text(
                 " ",
                 strip=True
             )
 
-            # =========================================
-            # KILLS (HS)
-            # Example:
-            # 23 (11)
-            # =========================================
+            # =====================================
+            # KILLS + HS
+            # =====================================
 
             khs = re.search(
                 r"(\d+)\s*\((\d+)\)",
@@ -151,11 +187,9 @@ def parse_map_stats(stats_html, player_slug):
                     khs.group(2)
                 )
 
-            # =========================================
+            # =====================================
             # KD
-            # Example:
-            # 23-14
-            # =========================================
+            # =====================================
 
             kd = re.search(
                 r"^(\d+)[-–](\d+)$",
@@ -172,63 +206,54 @@ def parse_map_stats(stats_html, player_slug):
                     kd.group(2)
                 )
 
-            # =========================================
+            # =====================================
             # RATING
-            # =========================================
+            # =====================================
 
-            rating_match = re.match(
+            rating = re.match(
                 r"^(\d\.\d{2})$",
                 txt
             )
 
-            if rating_match:
+            if rating:
 
-                rating = float(
-                    rating_match.group(1)
+                stats["rating"] = float(
+                    rating.group(1)
                 )
 
-                if (
-                    rating >= 0.30
-                    and rating <= 3.00
-                ):
-
-                    stats["rating"] = rating
-
-            # =========================================
+            # =====================================
             # ADR
-            # =========================================
+            # =====================================
 
-            adr_match = re.match(
+            adr = re.match(
                 r"^(\d{2,3}\.\d)$",
                 txt
             )
 
-            if adr_match:
+            if adr:
 
-                adr = float(
-                    adr_match.group(1)
+                val = float(
+                    adr.group(1)
                 )
 
-                if adr >= 30 and adr <= 200:
+                if 30 <= val <= 200:
 
-                    stats["adr"] = adr
+                    stats["adr"] = val
 
-            # =========================================
+            # =====================================
             # KAST
-            # =========================================
+            # =====================================
 
-            kast_match = re.match(
+            kast = re.match(
                 r"^(\d{1,3}\.\d)%$",
                 txt
             )
 
-            if kast_match:
+            if kast:
 
-                kast = float(
-                    kast_match.group(1)
+                stats["kast"] = float(
+                    kast.group(1)
                 )
-
-                stats["kast"] = kast
 
         if stats["kills"] is not None:
 
@@ -249,15 +274,11 @@ def get_player_data(name, team_hint=None):
 
     pid, slug, display = player
 
-    # =============================================
-    # RESULTS PAGE
-    # =============================================
-
-    results_url = (
-        f"{HLTV_BASE}/results?player={pid}"
-    )
-
     try:
+
+        results_url = (
+            f"{HLTV_BASE}/results?player={pid}"
+        )
 
         r = requests.get(
             results_url,
@@ -347,18 +368,12 @@ def get_player_data(name, team_hint=None):
 
         map_ids = list(
             dict.fromkeys(map_ids)
-        )
+        )[:2]
 
         print(
             "MAP IDS:",
             map_ids
         )
-
-        # =========================================
-        # MAPS 1-2 ONLY
-        # =========================================
-
-        map_ids = map_ids[:2]
 
         # =========================================
         # MAPSTATS PAGE
@@ -379,10 +394,8 @@ def get_player_data(name, team_hint=None):
                     timeout=20
                 )
 
-                stats_html = stats_r.text
-
                 parsed = parse_map_stats(
-                    stats_html,
+                    stats_r.text,
                     slug
                 )
 
@@ -402,12 +415,9 @@ def get_player_data(name, team_hint=None):
 
             if parsed:
 
-                parsed.update({
+                parsed["match_id"] = match_id
 
-                    "match_id": match_id,
-
-                    "map_id": map_id
-                })
+                parsed["map_id"] = map_id
 
                 all_maps.append(
                     parsed
@@ -425,91 +435,72 @@ def get_player_data(name, team_hint=None):
         return None
 
     # =============================================
-    # REAL CALCULATIONS
+    # REAL DATA
     # =============================================
 
-    valid_kills = [
+    kills = [
         m["kills"]
         for m in all_maps
         if m["kills"] is not None
     ]
 
-    valid_hs = [
+    hs = [
         m["hs"]
         for m in all_maps
         if m["hs"] is not None
     ]
 
-    valid_rating = [
+    ratings = [
         m["rating"]
         for m in all_maps
         if m["rating"] is not None
     ]
 
-    valid_adr = [
+    adr = [
         m["adr"]
         for m in all_maps
         if m["adr"] is not None
     ]
 
-    valid_kast = [
+    kast = [
         m["kast"]
         for m in all_maps
         if m["kast"] is not None
     ]
 
-    if not valid_kills:
+    if not kills:
         return None
-
-    avg_kills = round(
-        sum(valid_kills)
-        / len(valid_kills),
-        2
-    )
-
-    avg_hs = round(
-        sum(valid_hs)
-        / len(valid_hs),
-        2
-    ) if valid_hs else 0
-
-    avg_rating = round(
-        sum(valid_rating)
-        / len(valid_rating),
-        2
-    ) if valid_rating else 0
-
-    avg_adr = round(
-        sum(valid_adr)
-        / len(valid_adr),
-        2
-    ) if valid_adr else 0
-
-    avg_kast = round(
-        sum(valid_kast)
-        / len(valid_kast),
-        2
-    ) if valid_kast else 0
-
-    # =============================================
-    # RETURN
-    # =============================================
 
     return {
 
         "player": display,
 
-        "avg": avg_kills,
+        "avg": round(
+            sum(kills) / len(kills),
+            2
+        ),
 
-        "avg_hs": avg_hs,
+        "avg_hs": round(
+            sum(hs) / len(hs),
+            2
+        ) if hs else 0,
 
-        "avg_rating": avg_rating,
+        "avg_rating": round(
+            sum(ratings) / len(ratings),
+            2
+        ) if ratings else 0,
 
-        "avg_adr": avg_adr,
+        "avg_adr": round(
+            sum(adr) / len(adr),
+            2
+        ) if adr else 0,
 
-        "avg_kast": avg_kast,
+        "avg_kast": round(
+            sum(kast) / len(kast),
+            2
+        ) if kast else 0,
 
-        "sample": len(valid_kills),
+        "sample": len(kills),
 
         "maps": all_maps
     }
