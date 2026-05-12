@@ -67,6 +67,10 @@ async def lookup(
         f"✅ FOUND: {display} ({pid})"
     )
 
+# =====================================================
+# SCAN COMMAND
+# =====================================================
+
 @bot.command()
 async def scan(
     ctx,
@@ -79,11 +83,18 @@ async def scan(
         f"🔎 Scanning {player}..."
     )
 
-    print("SCAN COMMAND HIT")
+    print(
+        "SCAN COMMAND HIT"
+    )
 
-data = get_player_data(
+    data = get_player_data(
         player,
         opponent
+    )
+
+    print(
+        "SCRAPER RETURN:",
+        data
     )
 
     if not data:
@@ -212,6 +223,7 @@ data = get_player_data(
     await ctx.send(
         embed=embed
     )
+
 # =====================================================
 # TOKEN
 # =====================================================
