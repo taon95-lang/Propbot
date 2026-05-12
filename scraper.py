@@ -359,7 +359,7 @@ def get_player_data(name, team_hint=None):
                 f"mapstatsid/{map_id}/match"
             )
 
-            try:
+        try:
 
     stats_r = requests.get(
         stats_url,
