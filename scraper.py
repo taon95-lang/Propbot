@@ -75,15 +75,15 @@ def get_player_data(player, opponent=None):
 
         "player": display,
 
-        "avg": 1,
+        "avg": r.status_code,
 
         "avg_hs": 1,
 
         "avg_rating": 1,
 
-        "sample": 1,
+        "sample": len(html),
 
         "maps": [
-            {"kills": 1}
+            {"kills": len(html[:100])}
         ]
     }
