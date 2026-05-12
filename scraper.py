@@ -27,85 +27,88 @@ def search_player(name, team_hint=None):
     try:
 
         url = (
-            f"{HLTV_BASE}/search?term={name}"
+            f"https://www.hltv.org/search?term={name}"
         )
 
         r = requests.get(
             url,
             headers=HEADERS,
-            timeout=20,
-            allow_redirects=True
-        )
-
-        html = r.text
-
-        print(
-            "SEARCH HTML LENGTH:",
-            len(html)
-        )
-
-        # =========================================
-        # PLAYER LINKS
-        # =========================================
-
-        matches = re.findall(
-            r'/player/(\d+)/([\w-]+)',
-            html
+            timeout=20
         )
 
         print(
-            "RAW MATCHES:",
-            matches[:10]
+            "SEARCH STATUS:",
+            r.status_code
         )
 
-        if not matches:
+        # =========================================
+        # JSON SEARCH
+        # =========================================
+
+        try:
+
+            data = r.json()
+
+            print(
+                "JSON DATA FOUND"
+            )
+
+        except Exception as e:
+
+            print(
+                "JSON ERROR:",
+                e
+            )
+
+            print(
+                "RAW HTML:",
+                r.text[:500]
+            )
+
             return None
 
         # =========================================
-        # REMOVE DUPLICATES
+        # FIND PLAYERS
         # =========================================
 
-        matches = list(
-            dict.fromkeys(matches)
-        )
+        players = []
 
-        # =========================================
-        # BEST MATCH
-        # =========================================
+        for section in data:
 
-        best = matches[0]
+            if (
+                isinstance(section, dict)
+                and section.get("players")
+            ):
 
-        name_clean = (
-            name.lower()
-            .replace(" ", "")
-        )
-
-        for pid, slug in matches:
-
-            slug_clean = (
-                slug.lower()
-                .replace("-", "")
-            )
-
-            if name_clean in slug_clean:
-
-                best = (
-                    pid,
-                    slug
-                )
+                players = section["players"]
 
                 break
 
-        pid, slug = best
+        print(
+            "PLAYERS:",
+            players[:3]
+        )
+
+        if not players:
+            return None
+
+        player = players[0]
+
+        pid = player.get("id")
+
+        slug = (
+            player.get("slug")
+            or player.get("name")
+            or name
+        )
 
         display = (
-            slug
-            .replace("-", " ")
-            .title()
+            player.get("name")
+            or slug
         )
 
         return (
-            pid,
+            str(pid),
             slug,
             display
         )
@@ -269,10 +272,19 @@ def get_player_data(name, team_hint=None):
 
     player = search_player(name)
 
+    print(
+        "SEARCH PLAYER RESULT:",
+        player
+    )
+
     if not player:
         return None
 
     pid, slug, display = player
+
+    # =============================================
+    # RESULTS PAGE
+    # =============================================
 
     try:
 
@@ -376,7 +388,7 @@ def get_player_data(name, team_hint=None):
         )
 
         # =========================================
-        # MAPSTATS PAGE
+        # MAPSTATS
         # =========================================
 
         for map_id in map_ids:
