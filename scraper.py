@@ -20,6 +20,12 @@ SESSION = requests.Session(
     impersonate="chrome110"
 )
 
+from curl_cffi import requests
+
+SESSION = requests.Session(
+    impersonate="chrome110"
+)
+
 def get_player_data(player, opponent=None):
 
     result = search_player(player)
@@ -50,8 +56,10 @@ def get_player_data(player, opponent=None):
             r.status_code
         )
 
+        html = r.text
+
         print(
-            r.text[:1000]
+            html[:1000]
         )
 
     except Exception as e:
