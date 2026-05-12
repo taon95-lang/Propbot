@@ -1,6 +1,6 @@
 import re
-from curl_cffi import request 
 from bs4 import BeautifulSoup
+from curl_cffi import requests
 
 # =====================================================
 # HLTV CONFIG
@@ -18,6 +18,10 @@ HEADERS = {
     )
 }
 
+SESSION = requests.Session(
+    impersonate="chrome110"
+)
+
 # =====================================================
 # SEARCH PLAYER
 # =====================================================
@@ -27,10 +31,10 @@ def search_player(name, team_hint=None):
     try:
 
         url = (
-            f"https://www.hltv.org/search?term={name}"
+            f"{HLTV_BASE}/search?term={name}"
         )
 
-        r = requests.get(
+        r = SESSION.get(
             url,
             headers=HEADERS,
             timeout=20
@@ -292,7 +296,7 @@ def get_player_data(name, team_hint=None):
             f"{HLTV_BASE}/results?player={pid}"
         )
 
-        r = requests.get(
+        r = SESSION.get(
             results_url,
             headers=HEADERS,
             timeout=20
@@ -345,7 +349,7 @@ def get_player_data(name, team_hint=None):
 
         try:
 
-            r = requests.get(
+            r = SESSION.get(
                 match_url,
                 headers=HEADERS,
                 timeout=20
@@ -400,7 +404,7 @@ def get_player_data(name, team_hint=None):
 
             try:
 
-                stats_r = requests.get(
+                stats_r = SESSION.get(
                     stats_url,
                     headers=HEADERS,
                     timeout=20
