@@ -2,7 +2,10 @@ import os
 import discord
 from discord.ext import commands
 
-from scraper import search_player
+from scraper import (
+    search_player,
+    get_player_data
+)
 
 # =====================================================
 # DISCORD SETUP
