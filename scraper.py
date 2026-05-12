@@ -286,6 +286,8 @@ def get_player_data(name, team_hint=None):
     match_links = list(
         dict.fromkeys(match_links)
     )
+    print("MATCH LINKS:", match_links[:5])
+    
 
     if not match_links:
         return None
@@ -338,6 +340,7 @@ def get_player_data(name, team_hint=None):
         map_ids = list(
             dict.fromkeys(map_ids)
         )
+        print("MAP IDS:", map_ids)
 
         # =========================================
         # MAPS 1–2 ONLY
@@ -380,6 +383,7 @@ def get_player_data(name, team_hint=None):
             # =====================================
 
             parsed = parse_map_stats(
+                print("PARSED:", parsed)
                 stats_html,
                 slug
             )
@@ -403,6 +407,7 @@ def get_player_data(name, team_hint=None):
     # =============================================
 
     if not all_maps:
+        print("TOTAL MAPS:", len(all_maps))
         return None
 
     # =============================================
