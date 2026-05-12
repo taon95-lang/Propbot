@@ -23,108 +23,43 @@ SESSION = requests.Session(
 )
 
 # =====================================================
-# SEARCH PLAYER
+# HARDCODED PLAYER SEARCH TEST
 # =====================================================
 
 def search_player(name, team_hint=None):
 
-    try:
+    test_players = {
 
-        url = (
-            f"{HLTV_BASE}/search?term={name}"
-        )
+        "donk": (
+            "21167",
+            "donk",
+            "donk"
+        ),
 
-        r = SESSION.get(
-            url,
-            headers=HEADERS,
-            timeout=20
+        "zywoo": (
+            "11893",
+            "zywoo",
+            "ZywOo"
+        ),
+
+        "m0nesy": (
+            "19230",
+            "m0nesy",
+            "m0NESY"
         )
+    }
+
+    key = name.lower()
+
+    if key in test_players:
 
         print(
-            "SEARCH STATUS:",
-            r.status_code
+            "HARDCODED PLAYER FOUND"
         )
 
-        # =========================================
-        # JSON SEARCH
-        # =========================================
+        return test_players[key]
 
-        try:
-
-            data = r.json()
-
-            print(
-                "JSON DATA FOUND"
-            )
-
-        except Exception as e:
-
-            print(
-                "JSON ERROR:",
-                e
-            )
-
-            print(
-                "RAW HTML:",
-                r.text[:500]
-            )
-
-            return None
-
-        # =========================================
-        # FIND PLAYERS
-        # =========================================
-
-        players = []
-
-        for section in data:
-
-            if (
-                isinstance(section, dict)
-                and section.get("players")
-            ):
-
-                players = section["players"]
-
-                break
-
-        print(
-            "PLAYERS:",
-            players[:3]
-        )
-
-        if not players:
-            return None
-
-        player = players[0]
-
-        pid = player.get("id")
-
-        slug = (
-            player.get("slug")
-            or player.get("name")
-            or name
-        )
-
-        display = (
-            player.get("name")
-            or slug
-        )
-
-        return (
-            str(pid),
-            slug,
-            display
-        )
-
-    except Exception as e:
-
-        print(
-            "SEARCH ERROR:",
-            e
-        )
-
-        return None
+    return None
 
 # =====================================================
 # PARSE MAP STATS
@@ -175,10 +110,6 @@ def parse_map_stats(html, player_slug):
                 strip=True
             )
 
-            # =====================================
-            # KILLS + HS
-            # =====================================
-
             khs = re.search(
                 r"(\d+)\s*\((\d+)\)",
                 txt
@@ -193,10 +124,6 @@ def parse_map_stats(html, player_slug):
                 stats["hs"] = int(
                     khs.group(2)
                 )
-
-            # =====================================
-            # KD
-            # =====================================
 
             kd = re.search(
                 r"^(\d+)[-–](\d+)$",
@@ -213,10 +140,6 @@ def parse_map_stats(html, player_slug):
                     kd.group(2)
                 )
 
-            # =====================================
-            # RATING
-            # =====================================
-
             rating = re.match(
                 r"^(\d\.\d{2})$",
                 txt
@@ -227,10 +150,6 @@ def parse_map_stats(html, player_slug):
                 stats["rating"] = float(
                     rating.group(1)
                 )
-
-            # =====================================
-            # ADR
-            # =====================================
 
             adr = re.match(
                 r"^(\d{2,3}\.\d)$",
@@ -246,10 +165,6 @@ def parse_map_stats(html, player_slug):
                 if 30 <= val <= 200:
 
                     stats["adr"] = val
-
-            # =====================================
-            # KAST
-            # =====================================
 
             kast = re.match(
                 r"^(\d{1,3}\.\d)%$",
@@ -285,10 +200,6 @@ def get_player_data(name, team_hint=None):
         return None
 
     pid, slug, display = player
-
-    # =============================================
-    # RESULTS PAGE
-    # =============================================
 
     try:
 
@@ -366,16 +277,8 @@ def get_player_data(name, team_hint=None):
 
             continue
 
-        # =========================================
-        # BO3 ONLY
-        # =========================================
-
         if "best of 3" not in match_html.lower():
             continue
-
-        # =========================================
-        # MAP IDS
-        # =========================================
 
         map_ids = re.findall(
             r"/stats/matches/mapstatsid/(\d+)/",
@@ -390,10 +293,6 @@ def get_player_data(name, team_hint=None):
             "MAP IDS:",
             map_ids
         )
-
-        # =========================================
-        # MAPSTATS
-        # =========================================
 
         for map_id in map_ids:
 
@@ -449,10 +348,6 @@ def get_player_data(name, team_hint=None):
 
     if not all_maps:
         return None
-
-    # =============================================
-    # REAL DATA
-    # =============================================
 
     kills = [
         m["kills"]
