@@ -79,7 +79,9 @@ async def scan(
         f"🔎 Scanning {player}..."
     )
 
-    data = get_player_data(
+    print("SCAN COMMAND HIT")
+
+data = get_player_data(
         player,
         opponent
     )
