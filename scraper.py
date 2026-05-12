@@ -1,18 +1,8 @@
 import re
-import random
-import time
-import logging
-import os
 import requests
+import logging
 
-from datetime import date, timedelta
 from bs4 import BeautifulSoup
-
-try:
-    from curl_cffi import requests as sess_req
-    CFFI_OK = True
-except ImportError:
-    CFFI_OK = False
 
 # =====================================================
 # LOGGER
@@ -21,175 +11,72 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 # =====================================================
-# HLTV CONFIG
+# HLTV
 # =====================================================
 
 HLTV_BASE = "https://www.hltv.org"
 
-PROFILES = [
-    "chrome116",
-    "safari17_0",
-    "chrome107",
-    "chrome110",
-    "chrome99"
-]
-
 # =====================================================
-# SESSION STATE
+# SEARCH PLAYER
 # =====================================================
 
-class HLTVState:
+def search_player(name, team_hint=None):
 
-    session = None
-    profile_idx = 0
-    warmed = False
-    stats_blocked_until = 0
-    mapstats_blocked_until = 0
-
-state = HLTVState()
-
-# =====================================================
-# ROTATE SESSION
-# =====================================================
-
-def _rotate():
-
-    if not CFFI_OK:
-        return None
-
-    state.profile_idx = (
-        (state.profile_idx + 1)
-        % len(PROFILES)
+    search_url = (
+        f"{HLTV_BASE}/search?term={name}"
     )
 
-    state.session = sess_req.Session(
-        impersonate=PROFILES[state.profile_idx]
-    )
-
-    state.warmed = False
-
-    return state.session
-
-# =====================================================
-# FETCH HTML
-# =====================================================
-
-def _fetch(url, referer=None):
-
-    # =============================================
-    # CURL_CFFI
-    # =============================================
-
-    if CFFI_OK:
-
-        if not state.session:
-            _rotate()
-
-        for _ in range(len(PROFILES)):
-
-            try:
-
-                if not state.warmed:
-
-                    state.session.get(
-                        HLTV_BASE + "/",
-                        timeout=10
-                    )
-
-                    state.warmed = True
-
-                headers = {
-                    "Referer": (
-                        referer
-                        or HLTV_BASE + "/"
-                    )
-                }
-
-                r = state.session.get(
-                    url,
-                    timeout=20,
-                    headers=headers
-                )
-
-                if (
-                    r.status_code == 200
-                    and "Just a moment"
-                    not in r.text
-                ):
-
-                    return r.text
-
-                if r.status_code == 403:
-
-                    _rotate()
-
-                    continue
-
-            except:
-
-                _rotate()
-
-    # =============================================
-    # SCRAPERAPI FALLBACK
-    # =============================================
-
-    scraper_key = os.getenv(
-        "SCRAPERAPI_KEY"
-    )
-
-    if scraper_key:
-
-        try:
-
-            params = {
-                "api_key": scraper_key,
-                "url": url
-            }
-
-            r = requests.get(
-                "https://api.scraperapi.com/",
-                params=params,
-                timeout=30
-            )
-
-            if r.status_code == 200:
-                return r.text
-
-        except:
-            pass
-
-    # =============================================
-    # NORMAL REQUEST FALLBACK
-    # =============================================
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 "
+            "(Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 "
+            "(KHTML, like Gecko) "
+            "Chrome/122 Safari/537.36"
+        )
+    }
 
     try:
 
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 "
-                "(Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 "
-                "(KHTML, like Gecko) "
-                "Chrome/122 Safari/537.36"
-            )
-        }
-
         r = requests.get(
-            url,
+            search_url,
             headers=headers,
             timeout=20
         )
 
-        if r.status_code == 200:
-            return r.text
+        text = r.text
 
-    except:
-        pass
+        matches = re.findall(
+            r'/player/(\d+)/([\w-]+)',
+            text
+        )
 
-    return None
+        if not matches:
+
+            return None
+
+        pid, slug = matches[0]
+
+        display = (
+            slug
+            .replace("-", " ")
+            .title()
+        )
+
+        return (
+            pid,
+            slug,
+            display
+        )
+
+    except Exception as e:
+
+        print("SEARCH ERROR:", e)
+
+        return None
 
 # =====================================================
-# SEARCH PLAYER
+# GET PLAYER DATA
 # =====================================================
 
 def get_player_data(name, team_hint=None):
@@ -206,7 +93,7 @@ def get_player_data(name, team_hint=None):
     pid, slug, display = player
 
     # =============================================
-    # TEMP TEST DATA
+    # TEMP SAMPLE DATA
     # =============================================
 
     sample_maps = [
@@ -301,6 +188,11 @@ def get_player_data(name, team_hint=None):
 
         "maps": sample_maps
     }
+
+# =====================================================
+# TEAM DEFENSE PLACEHOLDER
+# =====================================================
+
 def get_team_conceded(team_name):
 
     return 0.95
