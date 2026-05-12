@@ -1,7 +1,5 @@
 discord.py
-requests
 beautifulsoup4
+curl_cffi
+requests
 lxml
-cloudscraper
-pandas
-numpy
