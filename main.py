@@ -67,10 +67,6 @@ async def lookup(
         f"✅ FOUND: {display} ({pid})"
     )
 
-# =====================================================
-# SCAN COMMAND
-# =====================================================
-
 @bot.command()
 async def scan(
     ctx,
@@ -79,60 +75,81 @@ async def scan(
     opponent=None
 ):
 
-    # =============================================
-    # VALIDATION
-    # =============================================
+    await ctx.send(
+        f"🔎 Scanning {player}..."
+    )
 
-    if not player:
+    data = get_player_data(
+        player,
+        opponent
+    )
+
+    if not data:
 
         await ctx.send(
-            "❌ Missing player"
+            "❌ No player data found."
         )
 
         return
 
-    result = search_player(player)
+    avg = data["avg"]
 
-    # =============================================
-    # PLAYER NOT FOUND
-    # =============================================
+    avg_hs = data["avg_hs"]
 
-    if not result:
+    avg_rating = data["avg_rating"]
 
-        await ctx.send(
-            "❌ Player not found"
-        )
+    sample = data["sample"]
 
-        return
+    maps = data["maps"]
 
-    pid, slug, display = result
+    line_float = float(line)
 
-    # =============================================
-    # SUCCESS
-    # =============================================
+    recent_kills = [
+
+        m["kills"]
+
+        for m in maps
+
+        if m.get("kills") is not None
+    ]
+
+    hits = len([
+
+        k for k in recent_kills
+
+        if k > line_float
+    ])
+
+    hit_rate = round(
+        (
+            hits / len(recent_kills)
+        ) * 100,
+        1
+    )
+
+    edge = round(
+        avg - line_float,
+        2
+    )
+
+    recent_maps = ", ".join([
+        str(k)
+        for k in recent_kills[:10]
+    ])
 
     embed = discord.Embed(
 
-        title="🎯 PLAYER SCAN",
+        title=(
+            f"🎯 {player.upper()} "
+            f"PROP SCAN"
+        ),
 
         color=0x00ff00
     )
 
     embed.add_field(
         name="👤 Player",
-        value=display,
-        inline=False
-    )
-
-    embed.add_field(
-        name="🆔 HLTV ID",
-        value=pid,
-        inline=False
-    )
-
-    embed.add_field(
-        name="🎯 Line",
-        value=line,
+        value=player,
         inline=False
     )
 
@@ -143,18 +160,56 @@ async def scan(
     )
 
     embed.add_field(
-        name="🔗 HLTV",
-        value=(
-            f"https://www.hltv.org/player/"
-            f"{pid}/{slug}"
-        ),
+        name="🎯 Line",
+        value=line,
+        inline=False
+    )
+
+    embed.add_field(
+        name="📊 Avg Kills",
+        value=avg,
+        inline=False
+    )
+
+    embed.add_field(
+        name="📈 Edge",
+        value=edge,
+        inline=False
+    )
+
+    embed.add_field(
+        name="🔥 Hit Rate",
+        value=f"{hit_rate}%",
+        inline=False
+    )
+
+    embed.add_field(
+        name="💥 Avg HS",
+        value=avg_hs,
+        inline=False
+    )
+
+    embed.add_field(
+        name="⭐ Avg Rating",
+        value=avg_rating,
+        inline=False
+    )
+
+    embed.add_field(
+        name="🧪 Sample",
+        value=sample,
+        inline=False
+    )
+
+    embed.add_field(
+        name="📋 Recent Maps",
+        value=recent_maps,
         inline=False
     )
 
     await ctx.send(
         embed=embed
     )
-
 # =====================================================
 # TOKEN
 # =====================================================
