@@ -30,8 +30,9 @@ def get_player_data(player, opponent=None):
     pid, slug, display = result
 
     url = (
-        f"https://www.hltv.org/results?player={pid}"
-    )
+        url = (
+    f"https://www.hltv.org/player/{pid}/{slug}"
+)
 
     try:
 
