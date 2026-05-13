@@ -3084,6 +3084,8 @@ def get_player_info(
     opponent_hint: str | None = None,
 ) -> dict:
     """
+    
+    
     Main scraper entry. Returns:
       {
         'player':        'ZywOo',
@@ -3101,6 +3103,7 @@ def get_player_info(
                    candidate's recent match history includes games vs the opponent.
                    Useful for !grade where only the opponent is known.
     """
+  print("GET_PLAYER_INFO START")
     logger.info(
         f"[scraper] Looking up '{player_name}' for {stat_type} "
         f"(team_hint={team_hint!r}, opponent_hint={opponent_hint!r})"
