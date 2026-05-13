@@ -193,7 +193,7 @@ for attempt in range(max_retries):
         if resp.status_code == 200:
             return resp.text
 
-                if resp.status_code == 200 and "Just a moment" not in resp.text:
+        if resp.status_code == 200 and "Just a moment" not in resp.text:
                     logger.info(f"[fetch] OK — {len(resp.text):,} chars [{_HLTV_SESSION_PROFILE}]")
                     return resp.text
 
