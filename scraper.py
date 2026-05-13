@@ -178,13 +178,13 @@ def _fetch(url: str, max_retries: int = 3) -> str | None:
                 )
                 print("REQUEST START")
 
-resp = sess.get(
-    url,
-    timeout=FETCH_TIMEOUT
-)
+                resp = sess.get(
+                    url,
+                    timeout=FETCH_TIMEOUT
+                )
 
-print("REQUEST DONE")
-print(resp.status_code)
+                print("REQUEST DONE")
+                print(resp.status_code)
 
                 if resp.status_code == 200 and "Just a moment" not in resp.text:
                     logger.info(f"[fetch] OK — {len(resp.text):,} chars [{_HLTV_SESSION_PROFILE}]")
