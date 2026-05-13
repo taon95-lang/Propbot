@@ -149,3 +149,20 @@ if __name__ == "__main__":
         print("Fetch success!")
     else:
         print("Failed to fetch data.")
+# -----------------------------------------------------------------------------
+# EXPORT FIXES
+# -----------------------------------------------------------------------------
+
+__all__ = [
+    "search_player",
+    "get_player_info",
+    "fetch",
+    "_fetch",
+    "parse_match_kills",
+    "_parse_match_kills",
+    "get_player_match_ids",
+]
+
+# compatibility aliases
+_fetch = fetch
+_parse_match_kills = parse_match_kills
