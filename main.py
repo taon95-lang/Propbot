@@ -4,7 +4,7 @@ from discord.ext import commands
 
 from scraper import (
     search_player,
-    get_player_data
+    get_player_info
 )
 
 # =====================================================
@@ -87,7 +87,7 @@ async def scan(
         "SCAN COMMAND HIT"
     )
 
-    data = get_player_data(
+    data = get_player_info(
         player,
         opponent
     )
