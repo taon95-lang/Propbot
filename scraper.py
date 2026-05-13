@@ -172,19 +172,25 @@ def _fetch(url: str, max_retries: int = 3) -> str | None:
         got_403_this_profile = False
         for attempt in range(max_retries):
             try:
-                tag = f" (retry {attempt})" if attempt else ""
-                logger.info(
-                    f"[fetch] GET {url}{tag} [{_HLTV_SESSION_PROFILE}]"
-                )
-                print("REQUEST START")
 
-                resp = sess.get(
-                    url,
-                    timeout=FETCH_TIMEOUT
-                )
+        tag = f" (retry {attempt})" if attempt else ""
 
-                print("REQUEST DONE")
-                print(resp.status_code)
+        logger.info(
+            f"[fetch] GET {url}{tag}"
+        )
+
+        print("REQUEST START")
+
+        resp = sess.get(
+            url,
+            timeout=FETCH_TIMEOUT
+        )
+
+        print("REQUEST DONE")
+        print(resp.status_code)
+
+        if resp.status_code == 200:
+            return resp.text
 
                 if resp.status_code == 200 and "Just a moment" not in resp.text:
                     logger.info(f"[fetch] OK — {len(resp.text):,} chars [{_HLTV_SESSION_PROFILE}]")
