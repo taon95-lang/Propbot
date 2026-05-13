@@ -1,5 +1,7 @@
-discord.py
+curl_cffi==0.7.1
 beautifulsoup4
-curl_cffi
-requests
 lxml
+requests
+discord.py
+numpy
+scipy
