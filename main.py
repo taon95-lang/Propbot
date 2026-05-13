@@ -51,6 +51,14 @@ async def lookup(
     player=None
 ):
 
+    if not player:
+
+        await ctx.send(
+            "❌ Please provide a player"
+        )
+
+        return
+
     result = search_player(player)
 
     if not result:
@@ -79,158 +87,221 @@ async def scan(
     opponent=None
 ):
 
-    await ctx.send(
-        f"🔎 Scanning {player}..."
-    )
+    try:
 
-    print(
-        "SCAN COMMAND HIT"
-    )
+        if not player or not line or not opponent:
 
-    await ctx.send(
-        "📡 Fetching HLTV data..."
-    )
+            await ctx.send(
+                "❌ Usage: !scan player line opponent"
+            )
 
-    data = get_player_info(
-        player,
-        opponent
-    )
-
-    await ctx.send(
-        "✅ HLTV response received"
-    )
-
-    print(
-        "SCRAPER RETURN:",
-        data
-    )
-
-    if not data:
+            return
 
         await ctx.send(
-            "❌ No player data found."
+            f"🔎 Scanning {player}..."
         )
 
-        return
+        print(
+            "SCAN COMMAND HIT"
+        )
 
-    avg = data["avg"]
+        await ctx.send(
+            "📡 Fetching HLTV data..."
+        )
 
-    avg_hs = data["avg_hs"]
+        data = get_player_info(
+            player,
+            opponent
+        )
 
-    avg_rating = data["avg_rating"]
+        await ctx.send(
+            "✅ HLTV response received"
+        )
 
-    sample = data["sample"]
+        print(
+            "SCRAPER RETURN:",
+            data
+        )
 
-    maps = data["maps"]
+        if not data:
 
-    line_float = float(line)
+            await ctx.send(
+                "❌ No player data found."
+            )
 
-    recent_kills = [
+            return
 
-        m["kills"]
+        # =====================================================
+        # SAFE DATA EXTRACTION
+        # =====================================================
 
-        for m in maps
+        avg = data.get("avg", 0)
 
-        if m.get("kills") is not None
-    ]
+        avg_hs = data.get("avg_hs", 0)
 
-    hits = len([
+        avg_rating = data.get("avg_rating", 0)
 
-        k for k in recent_kills
+        sample = data.get("sample", 0)
 
-        if k > line_float
-    ])
+        maps = data.get("maps", [])
 
-    hit_rate = round(
-        (
-            hits / len(recent_kills)
-        ) * 100,
-        1
-    )
+        try:
+            line_float = float(line)
+        except:
+            await ctx.send(
+                "❌ Invalid line"
+            )
+            return
 
-    edge = round(
-        avg - line_float,
-        2
-    )
+        # =====================================================
+        # RECENT KILLS
+        # =====================================================
 
-    recent_maps = ", ".join([
-        str(k)
-        for k in recent_kills[:10]
-    ])
+        recent_kills = [
 
-    embed = discord.Embed(
+            m.get("kills")
 
-        title=(
-            f"🎯 {player.upper()} "
-            f"PROP SCAN"
-        ),
+            for m in maps
 
-        color=0x00ff00
-    )
+            if m.get("kills") is not None
+        ]
 
-    embed.add_field(
-        name="👤 Player",
-        value=player,
-        inline=False
-    )
+        # =====================================================
+        # HIT RATE FIX
+        # =====================================================
 
-    embed.add_field(
-        name="⚔️ Opponent",
-        value=opponent,
-        inline=False
-    )
+        hits = len([
 
-    embed.add_field(
-        name="🎯 Line",
-        value=line,
-        inline=False
-    )
+            k for k in recent_kills
 
-    embed.add_field(
-        name="📊 Avg Kills",
-        value=avg,
-        inline=False
-    )
+            if k > line_float
+        ])
 
-    embed.add_field(
-        name="📈 Edge",
-        value=edge,
-        inline=False
-    )
+        if len(recent_kills) == 0:
 
-    embed.add_field(
-        name="🔥 Hit Rate",
-        value=f"{hit_rate}%",
-        inline=False
-    )
+            hit_rate = 0.0
 
-    embed.add_field(
-        name="💥 Avg HS",
-        value=avg_hs,
-        inline=False
-    )
+        else:
 
-    embed.add_field(
-        name="⭐ Avg Rating",
-        value=avg_rating,
-        inline=False
-    )
+            hit_rate = round(
+                (
+                    hits / len(recent_kills)
+                ) * 100,
+                1
+            )
 
-    embed.add_field(
-        name="🧪 Sample",
-        value=sample,
-        inline=False
-    )
+        # =====================================================
+        # EDGE
+        # =====================================================
 
-    embed.add_field(
-        name="📋 Recent Maps",
-        value=recent_maps,
-        inline=False
-    )
+        edge = round(
+            avg - line_float,
+            2
+        )
 
-    await ctx.send(
-        embed=embed
-    )
+        # =====================================================
+        # RECENT MAPS STRING
+        # =====================================================
+
+        if len(recent_kills) == 0:
+
+            recent_maps = "No maps found"
+
+        else:
+
+            recent_maps = ", ".join([
+                str(k)
+                for k in recent_kills[:10]
+            ])
+
+        # =====================================================
+        # EMBED
+        # =====================================================
+
+        embed = discord.Embed(
+
+            title=(
+                f"🎯 {player.upper()} "
+                f"PROP SCAN"
+            ),
+
+            color=0x00ff00
+        )
+
+        embed.add_field(
+            name="👤 Player",
+            value=player,
+            inline=False
+        )
+
+        embed.add_field(
+            name="⚔️ Opponent",
+            value=opponent,
+            inline=False
+        )
+
+        embed.add_field(
+            name="🎯 Line",
+            value=line,
+            inline=False
+        )
+
+        embed.add_field(
+            name="📊 Avg Kills",
+            value=avg,
+            inline=False
+        )
+
+        embed.add_field(
+            name="📈 Edge",
+            value=edge,
+            inline=False
+        )
+
+        embed.add_field(
+            name="🔥 Hit Rate",
+            value=f"{hit_rate}%",
+            inline=False
+        )
+
+        embed.add_field(
+            name="💥 Avg HS",
+            value=avg_hs,
+            inline=False
+        )
+
+        embed.add_field(
+            name="⭐ Avg Rating",
+            value=avg_rating,
+            inline=False
+        )
+
+        embed.add_field(
+            name="🧪 Sample",
+            value=sample,
+            inline=False
+        )
+
+        embed.add_field(
+            name="📋 Recent Maps",
+            value=recent_maps,
+            inline=False
+        )
+
+        await ctx.send(
+            embed=embed
+        )
+
+    except Exception as e:
+
+        print(
+            "SCAN ERROR:",
+            e
+        )
+
+        await ctx.send(
+            f"❌ Scan crashed: {e}"
+        )
 
 # =====================================================
 # TOKEN
