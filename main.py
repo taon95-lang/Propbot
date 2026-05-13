@@ -87,9 +87,17 @@ async def scan(
         "SCAN COMMAND HIT"
     )
 
+    await ctx.send(
+        "📡 Fetching HLTV data..."
+    )
+
     data = get_player_info(
         player,
         opponent
+    )
+
+    await ctx.send(
+        "✅ HLTV response received"
     )
 
     print(
