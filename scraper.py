@@ -171,7 +171,7 @@ def _fetch(url: str, max_retries: int = 3) -> str | None:
 
         got_403_this_profile = False
         for attempt in range(max_retries):
-            try:
+          try:
 
         tag = f" (retry {attempt})" if attempt else ""
 
