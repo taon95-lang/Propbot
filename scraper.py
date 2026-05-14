@@ -103,7 +103,7 @@ def _fetch(url):
             print(f"STATUS: {r.status_code}")
 
             # =====================================================
-            # CLOUDLFARE FIX
+            # CLOUDFLARE FIX
             # =====================================================
 
             if (
@@ -162,10 +162,6 @@ def search_player(name: str):
         return None
 
     key = name.lower().strip()
-
-    # =====================================================
-    # STATIC PLAYER CACHE
-    # =====================================================
 
     STATIC_IDS = {
 
@@ -260,6 +256,8 @@ def get_player_match_ids(
                 (mid, slug)
             )
 
+    print(f"MATCH IDS FOUND: {len(final)}")
+
     return final[:max_matches]
 
 # =========================================================
@@ -276,58 +274,106 @@ def _parse_match_kills(
         "html.parser"
     )
 
+    maps = []
+
     slug_norm = re.sub(
         r"[^a-z0-9]",
         "",
         player_slug.lower()
     )
 
-    maps = []
-
     rows = soup.find_all("tr")
+
+    print(f"TOTAL ROWS FOUND: {len(rows)}")
 
     for tr in rows:
 
-        txt = tr.get_text(
+        row_text = tr.get_text(
             " ",
             strip=True
-        ).lower()
+        )
 
-        txt_norm = re.sub(
+        row_lower = row_text.lower()
+
+        row_norm = re.sub(
             r"[^a-z0-9]",
             "",
-            txt
+            row_lower
         )
 
-        if slug_norm not in txt_norm:
+        # =================================================
+        # PLAYER CHECK
+        # =================================================
+
+        if slug_norm not in row_norm:
             continue
 
-        # =====================================================
-        # KILLS
-        # =====================================================
+        print(f"PLAYER ROW FOUND: {row_text}")
 
-        kd = re.search(
+        # =================================================
+        # FIND NUMBERS
+        # =================================================
+
+        numbers = re.findall(
+            r'\d+',
+            row_text
+        )
+
+        print(f"NUMBERS FOUND: {numbers}")
+
+        if len(numbers) < 2:
+            continue
+
+        # =================================================
+        # TRY K-D FORMAT
+        # =================================================
+
+        kd_match = re.search(
             r'(\d+)\s*-\s*(\d+)',
-            txt
+            row_text
         )
 
-        if not kd:
+        kills = None
+
+        if kd_match:
+
+            kills = int(
+                kd_match.group(1)
+            )
+
+            print(f"KILLS PARSED: {kills}")
+
+        else:
+
+            possible = [
+
+                int(x)
+
+                for x in numbers
+
+                if int(x) <= 40
+
+            ]
+
+            if possible:
+
+                kills = max(possible)
+
+                print(f"FALLBACK KILLS: {kills}")
+
+        if kills is None:
             continue
 
-        kills = int(
-            kd.group(1)
-        )
-
-        # =====================================================
+        # =================================================
         # HEADSHOTS
-        # =====================================================
+        # =================================================
+
+        hs = None
 
         hs_match = re.search(
             r'\((\d+)\)',
-            txt
+            row_text
         )
-
-        hs = None
 
         if hs_match:
 
@@ -337,18 +383,20 @@ def _parse_match_kills(
                     hs_match.group(1)
                 )
 
+                print(f"HS PARSED: {hs}")
+
             except:
                 pass
 
-        # =====================================================
+        # =================================================
         # RATING
-        # =====================================================
+        # =================================================
 
         rating = None
 
-        rating_match = re.search(
+        rating_match = re.findall(
             r'(\d\.\d{2})',
-            txt
+            row_text
         )
 
         if rating_match:
@@ -356,8 +404,10 @@ def _parse_match_kills(
             try:
 
                 rating = float(
-                    rating_match.group(1)
+                    rating_match[-1]
                 )
+
+                print(f"RATING PARSED: {rating}")
 
             except:
                 pass
@@ -372,8 +422,10 @@ def _parse_match_kills(
 
         })
 
+    print(f"TOTAL MAPS PARSED: {len(maps)}")
+
     return {
-        "maps": maps[:2]
+        "maps": maps[:20]
     }
 
 # =========================================================
@@ -397,7 +449,6 @@ def get_player_info(
     print(f"FOUND PLAYER: {display}")
 
     # =====================================================
-    # STEP 1
     # GET MATCH IDS
     # =====================================================
 
@@ -411,12 +462,11 @@ def get_player_info(
         f"{len(match_ids)}"
     )
 
-    # =====================================================
-    # STEP 2
-    # LOOP THROUGH MATCHES
-    # =====================================================
-
     all_maps = []
+
+    # =====================================================
+    # LOOP MATCHES
+    # =====================================================
 
     for match_id, match_slug in match_ids:
 
@@ -427,15 +477,19 @@ def get_player_info(
                 f"{match_id}/{match_slug}"
             )
 
+            print(f"CHECKING MATCH: {match_url}")
+
             html = _fetch(
                 match_url
             )
 
             if not html:
+
+                print("NO HTML RETURNED")
+
                 continue
 
             # =================================================
-            # STEP 3
             # PARSE MATCH
             # =================================================
 
@@ -445,6 +499,9 @@ def get_player_info(
             )
 
             if not parsed:
+
+                print("NO PARSED DATA")
+
                 continue
 
             maps = parsed.get(
@@ -452,8 +509,9 @@ def get_player_info(
                 []
             )
 
+            print(f"MAPS RETURNED: {len(maps)}")
+
             # =================================================
-            # STEP 4
             # SAVE MAPS
             # =================================================
 
@@ -475,7 +533,6 @@ def get_player_info(
                 })
 
             # =================================================
-            # STEP 5
             # RANDOM DELAY
             # =================================================
 
@@ -492,9 +549,10 @@ def get_player_info(
                 f"MATCH ERROR: {e}"
             )
 
+    print(f"TOTAL MAPS COLLECTED: {len(all_maps)}")
+
     # =====================================================
-    # STEP 6
-    # BUILD FINAL STATS
+    # NO DATA
     # =====================================================
 
     if not all_maps:
@@ -514,6 +572,10 @@ def get_player_info(
             "maps": []
 
         }
+
+    # =====================================================
+    # BUILD STATS
+    # =====================================================
 
     kills = [
 
