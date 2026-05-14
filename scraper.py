@@ -261,7 +261,7 @@ def get_player_match_ids(
     return final[:max_matches]
 
 # =========================================================
-# PARSE MATCH KILLS
+# NEW PARSE MATCH KILLS
 # =========================================================
 
 def _parse_match_kills(
@@ -269,163 +269,95 @@ def _parse_match_kills(
     player_slug
 ):
 
-    soup = BeautifulSoup(
-        html,
-        "html.parser"
-    )
-
     maps = []
 
-    slug_norm = re.sub(
-        r"[^a-z0-9]",
-        "",
-        player_slug.lower()
+    # =====================================================
+    # DIRECT K-D EXTRACTION
+    # =====================================================
+
+    pattern = re.findall(
+
+        rf'{player_slug}".*?>(\d+)-(\d+)<',
+
+        html,
+
+        re.IGNORECASE
     )
 
-    rows = soup.find_all("tr")
+    print(f"KD MATCHES FOUND: {pattern}")
 
-    print(f"TOTAL ROWS FOUND: {len(rows)}")
+    for kd in pattern[:2]:
 
-    for tr in rows:
+        try:
 
-        row_text = tr.get_text(
+            kills = int(kd[0])
+
+            maps.append({
+
+                "kills": kills,
+
+                "hs": None,
+
+                "rating": None
+
+            })
+
+            print(f"PARSED KILLS: {kills}")
+
+        except Exception as e:
+
+            print(f"PARSE ERROR: {e}")
+
+    # =====================================================
+    # FALLBACK METHOD
+    # =====================================================
+
+    if not maps:
+
+        soup = BeautifulSoup(
+            html,
+            "html.parser"
+        )
+
+        text = soup.get_text(
             " ",
             strip=True
         )
 
-        row_lower = row_text.lower()
-
-        row_norm = re.sub(
-            r"[^a-z0-9]",
-            "",
-            row_lower
+        regex = re.findall(
+            r'(\d+)-(\d+)',
+            text
         )
 
-        # =================================================
-        # PLAYER CHECK
-        # =================================================
+        print(f"FALLBACK KD FOUND: {regex[:10]}")
 
-        if slug_norm not in row_norm:
-            continue
-
-        print(f"PLAYER ROW FOUND: {row_text}")
-
-        # =================================================
-        # FIND NUMBERS
-        # =================================================
-
-        numbers = re.findall(
-            r'\d+',
-            row_text
-        )
-
-        print(f"NUMBERS FOUND: {numbers}")
-
-        if len(numbers) < 2:
-            continue
-
-        # =================================================
-        # TRY K-D FORMAT
-        # =================================================
-
-        kd_match = re.search(
-            r'(\d+)\s*-\s*(\d+)',
-            row_text
-        )
-
-        kills = None
-
-        if kd_match:
-
-            kills = int(
-                kd_match.group(1)
-            )
-
-            print(f"KILLS PARSED: {kills}")
-
-        else:
-
-            possible = [
-
-                int(x)
-
-                for x in numbers
-
-                if int(x) <= 40
-
-            ]
-
-            if possible:
-
-                kills = max(possible)
-
-                print(f"FALLBACK KILLS: {kills}")
-
-        if kills is None:
-            continue
-
-        # =================================================
-        # HEADSHOTS
-        # =================================================
-
-        hs = None
-
-        hs_match = re.search(
-            r'\((\d+)\)',
-            row_text
-        )
-
-        if hs_match:
+        for kd in regex[:2]:
 
             try:
 
-                hs = int(
-                    hs_match.group(1)
-                )
+                kills = int(kd[0])
 
-                print(f"HS PARSED: {hs}")
+                if 0 <= kills <= 50:
+
+                    maps.append({
+
+                        "kills": kills,
+
+                        "hs": None,
+
+                        "rating": None
+
+                    })
+
+                    print(f"FALLBACK KILLS: {kills}")
 
             except:
                 pass
 
-        # =================================================
-        # RATING
-        # =================================================
-
-        rating = None
-
-        rating_match = re.findall(
-            r'(\d\.\d{2})',
-            row_text
-        )
-
-        if rating_match:
-
-            try:
-
-                rating = float(
-                    rating_match[-1]
-                )
-
-                print(f"RATING PARSED: {rating}")
-
-            except:
-                pass
-
-        maps.append({
-
-            "kills": kills,
-
-            "hs": hs,
-
-            "rating": rating
-
-        })
-
-    print(f"TOTAL MAPS PARSED: {len(maps)}")
+    print(f"FINAL MAP COUNT: {len(maps)}")
 
     return {
-        "maps": maps[:20]
+        "maps": maps[:2]
     }
 
 # =========================================================
