@@ -43,6 +43,33 @@ except:
     _SESSION = requests.Session()
 
 # =========================================================
+# ROTATE SESSION
+# =========================================================
+
+def _rotate_session():
+
+    global _SESSION
+    global _profile_idx
+
+    _profile_idx = (
+        _profile_idx + 1
+    ) % len(_PROFILES)
+
+    profile = _PROFILES[_profile_idx]
+
+    print(f"ROTATING PROFILE -> {profile}")
+
+    try:
+
+        _SESSION = requests.Session(
+            impersonate=profile
+        )
+
+    except:
+
+        _SESSION = requests.Session()
+
+# =========================================================
 # FETCH
 # =========================================================
 
@@ -75,20 +102,51 @@ def _fetch(url):
 
             print(f"STATUS: {r.status_code}")
 
-            if r.status_code == 200:
+            # =====================================================
+            # CLOUDLFARE FIX
+            # =====================================================
 
-                if "Just a moment" in r.text:
-                    print("Cloudflare page detected")
-                    time.sleep(2)
-                    continue
+            if (
+                "Just a moment" in r.text
+                or "Checking your browser" in r.text
+            ):
+
+                print("CLOUDFLARE DETECTED")
+
+                _rotate_session()
+
+                time.sleep(2)
+
+                continue
+
+            # =====================================================
+            # SUCCESS
+            # =====================================================
+
+            if (
+                r.status_code == 200
+                and len(r.text) > 1000
+            ):
 
                 return r.text
+
+            # =====================================================
+            # ROTATE ON 403
+            # =====================================================
+
+            if r.status_code == 403:
+
+                print("403 BLOCKED")
+
+                _rotate_session()
 
             time.sleep(1)
 
         except Exception as e:
 
             print(f"FETCH ERROR: {e}")
+
+            _rotate_session()
 
             time.sleep(1)
 
@@ -105,8 +163,41 @@ def search_player(name: str):
 
     key = name.lower().strip()
 
-    if key == "donk":
-        return ("21167", "donk", "donk")
+    # =====================================================
+    # STATIC PLAYER CACHE
+    # =====================================================
+
+    STATIC_IDS = {
+
+        "donk": ("21167", "donk", "donk"),
+
+        "zywoo": (
+            "11893",
+            "zywoo",
+            "ZywOo"
+        ),
+
+        "m0nesy": (
+            "19230",
+            "m0nesy",
+            "m0NESY"
+        ),
+
+        "niko": (
+            "3741",
+            "niko",
+            "NiKo"
+        ),
+
+        "sh1ro": (
+            "16920",
+            "sh1ro",
+            "sh1ro"
+        ),
+    }
+
+    if key in STATIC_IDS:
+        return STATIC_IDS[key]
 
     url = f"{HLTV_BASE}/search?query={name}"
 
@@ -135,9 +226,15 @@ def search_player(name: str):
 # GET PLAYER MATCH IDS
 # =========================================================
 
-def get_player_match_ids(player_id, max_matches=10):
+def get_player_match_ids(
+    player_id,
+    max_matches=10
+):
 
-    url = f"{HLTV_BASE}/results?player={player_id}"
+    url = (
+        f"{HLTV_BASE}/results"
+        f"?player={player_id}"
+    )
 
     html = _fetch(url)
 
@@ -169,20 +266,23 @@ def get_player_match_ids(player_id, max_matches=10):
 # PARSE MATCH KILLS
 # =========================================================
 
-def _parse_match_kills(html, player_slug):
+def _parse_match_kills(
+    html,
+    player_slug
+):
 
     soup = BeautifulSoup(
         html,
         "html.parser"
     )
 
-    maps = []
-
     slug_norm = re.sub(
         r"[^a-z0-9]",
         "",
         player_slug.lower()
     )
+
+    maps = []
 
     rows = soup.find_all("tr")
 
@@ -202,49 +302,75 @@ def _parse_match_kills(html, player_slug):
         if slug_norm not in txt_norm:
             continue
 
+        # =====================================================
+        # KILLS
+        # =====================================================
+
         kd = re.search(
             r'(\d+)\s*-\s*(\d+)',
             txt
         )
 
-        if kd:
+        if not kd:
+            continue
 
-            kills = int(
-                kd.group(1)
-            )
+        kills = int(
+            kd.group(1)
+        )
 
-            hs_match = re.search(
-                r'\((\d+)\)',
-                txt
-            )
+        # =====================================================
+        # HEADSHOTS
+        # =====================================================
 
-            hs = None
+        hs_match = re.search(
+            r'\((\d+)\)',
+            txt
+        )
 
-            if hs_match:
+        hs = None
+
+        if hs_match:
+
+            try:
+
                 hs = int(
                     hs_match.group(1)
                 )
 
-            rating_match = re.search(
-                r'(\d\.\d{2})',
-                txt
-            )
+            except:
+                pass
 
-            rating = None
+        # =====================================================
+        # RATING
+        # =====================================================
 
-            if rating_match:
-                try:
-                    rating = float(
-                        rating_match.group(1)
-                    )
-                except:
-                    pass
+        rating = None
 
-            maps.append({
-                "kills": kills,
-                "hs": hs,
-                "rating": rating
-            })
+        rating_match = re.search(
+            r'(\d\.\d{2})',
+            txt
+        )
+
+        if rating_match:
+
+            try:
+
+                rating = float(
+                    rating_match.group(1)
+                )
+
+            except:
+                pass
+
+        maps.append({
+
+            "kills": kills,
+
+            "hs": hs,
+
+            "rating": rating
+
+        })
 
     return {
         "maps": maps[:2]
@@ -254,7 +380,10 @@ def _parse_match_kills(html, player_slug):
 # GET PLAYER INFO
 # =========================================================
 
-def get_player_info(player_name, opponent=None):
+def get_player_info(
+    player_name,
+    opponent=None
+):
 
     result = search_player(
         player_name
@@ -267,12 +396,25 @@ def get_player_info(player_name, opponent=None):
 
     print(f"FOUND PLAYER: {display}")
 
+    # =====================================================
+    # STEP 1
+    # GET MATCH IDS
+    # =====================================================
+
     match_ids = get_player_match_ids(
         pid,
         max_matches=10
     )
 
-    print(f"MATCHES FOUND: {len(match_ids)}")
+    print(
+        f"MATCHES FOUND: "
+        f"{len(match_ids)}"
+    )
+
+    # =====================================================
+    # STEP 2
+    # LOOP THROUGH MATCHES
+    # =====================================================
 
     all_maps = []
 
@@ -280,15 +422,22 @@ def get_player_info(player_name, opponent=None):
 
         try:
 
-            url = (
+            match_url = (
                 f"{HLTV_BASE}/matches/"
                 f"{match_id}/{match_slug}"
             )
 
-            html = _fetch(url)
+            html = _fetch(
+                match_url
+            )
 
             if not html:
                 continue
+
+            # =================================================
+            # STEP 3
+            # PARSE MATCH
+            # =================================================
 
             parsed = _parse_match_kills(
                 html,
@@ -303,51 +452,93 @@ def get_player_info(player_name, opponent=None):
                 []
             )
 
+            # =================================================
+            # STEP 4
+            # SAVE MAPS
+            # =================================================
+
             for m in maps:
 
-                if m.get("kills") is not None:
+                kills = m.get("kills")
 
-                    all_maps.append({
-                        "kills": m.get("kills"),
-                        "hs": m.get("hs"),
-                        "rating": m.get("rating")
-                    })
+                if kills is None:
+                    continue
+
+                all_maps.append({
+
+                    "kills": kills,
+
+                    "hs": m.get("hs"),
+
+                    "rating": m.get("rating")
+
+                })
+
+            # =================================================
+            # STEP 5
+            # RANDOM DELAY
+            # =================================================
 
             time.sleep(
-                random.uniform(0.5, 1.0)
+                random.uniform(
+                    0.5,
+                    1.2
+                )
             )
 
         except Exception as e:
 
             print(
-                f"MATCH PARSE ERROR: {e}"
+                f"MATCH ERROR: {e}"
             )
+
+    # =====================================================
+    # STEP 6
+    # BUILD FINAL STATS
+    # =====================================================
 
     if not all_maps:
 
         return {
+
+            "player": display,
+
             "avg": 0,
+
             "avg_hs": 0,
+
             "avg_rating": 0,
+
             "sample": 0,
+
             "maps": []
+
         }
 
     kills = [
+
         m["kills"]
+
         for m in all_maps
+
         if m.get("kills") is not None
     ]
 
     hs = [
+
         m["hs"]
+
         for m in all_maps
+
         if m.get("hs") is not None
     ]
 
     ratings = [
+
         m["rating"]
+
         for m in all_maps
+
         if m.get("rating") is not None
     ]
 
@@ -367,12 +558,19 @@ def get_player_info(player_name, opponent=None):
     ) if ratings else 0
 
     return {
+
         "player": display,
+
         "avg": avg,
+
         "avg_hs": avg_hs,
+
         "avg_rating": avg_rating,
+
         "sample": len(kills),
+
         "maps": all_maps
+
     }
 
 # =========================================================
