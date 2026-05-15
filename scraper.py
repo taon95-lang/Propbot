@@ -29,23 +29,14 @@ def _fetch(url):
 
 def search_player(name: str):
     name_clean = name.lower().strip()
-    # STATIC CACHE: Instant results for common stars
-    STATIC = {
-        "donk": ("21167", "donk"),
-        "zywoo": ("11893", "zywoo"),
-        "m0nesy": ("19230", "m0nesy"),
-        "niko": ("3741", "niko"),
-        "elkera": ("21126", "elkera")
-    }
+    STATIC = {"donk": ("21167", "donk"), "zywoo": ("11893", "zywoo"), "m0nesy": ("19230", "m0nesy"), "niko": ("3741", "niko")}
     if name_clean in STATIC: return STATIC[name_clean][0], STATIC[name_clean][1], STATIC[name_clean][1].title()
 
     html, final_url = _fetch(f"{HLTV_BASE}/search?query={name_clean}")
     if not html: return None
-    
     if "/player/" in final_url:
         m = re.search(r'/player/(\d+)/([^/]+)', final_url)
         if m: return m.group(1), m.group(2), m.group(2).title()
-
     matches = re.findall(r'/player/(\d+)/([^"]+)', html)
     if matches:
         pid, slug = matches[0]
@@ -57,7 +48,7 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
     if not search_res: return "FAIL: Player not found."
     pid, slug, display = search_res
     
-    # FETCH ALL HISTORY IN ONE GO
+    # FETCH HISTORY (One request for speed)
     stats_url = f"{HLTV_BASE}/stats/players/matches/{pid}/{slug}"
     html, _ = _fetch(stats_url)
     if not html: return "FAIL: Stats page blocked."
@@ -65,57 +56,64 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
     soup = BeautifulSoup(html, "html.parser")
     rows = soup.find("table", {"class": "stats-table"}).find("tbody").find_all("tr")
     
-    series_map = {}
-    total_rounds_played = 0
-    total_kills_all = 0
+    series_groups = []
+    current_key = None
+    current_maps = []
 
     for row in rows:
         cols = row.find_all("td")
-        date, opp, m_name, kd = cols[0].text, cols[1].text.lower(), cols[2].text, cols[4].text
-        # Extract rounds from the 'Result' column (e.g., "13 - 7")
-        res_text = cols[3].text
-        r_nums = re.findall(r'\d+', res_text)
-        m_rounds = sum(int(n) for n in r_nums) if len(r_nums) >= 2 else 24
-
+        if len(cols) < 5: continue
+        date, opp = cols[0].text, cols[1].text.lower()
+        res_text, kd = cols[3].text, cols[4].text
+        
         try:
             kills = int(kd.split("-")[0].strip())
+            r_nums = re.findall(r'\d+', res_text)
+            m_rounds = sum(int(n) for n in r_nums) if len(r_nums) >= 2 else 24
+            
             key = f"{date}_{opp}"
-            if key not in series_map: series_map[key] = []
-            if len(series_map[key]) < 2:
-                series_map[key].append(kills)
-                total_rounds_played += m_rounds
-                total_kills_all += kills
+            if key != current_key:
+                if current_maps: series_groups.append(current_maps)
+                current_key, current_maps = key, []
+            current_maps.append({"kills": kills, "rounds": m_rounds})
         except: continue
+    if current_maps: series_groups.append(current_maps)
 
-    series_totals = [sum(m) for m in series_map.values() if len(m) == 2][:10]
-    if not series_totals: return "FAIL: No BO3 data found."
+    final_series_totals = []
+    total_k, total_r = 0, 0
+    
+    for group in series_groups:
+        if len(final_series_totals) >= 10: break
+        if len(group) >= 2:
+            # Table is newest-to-oldest. Last two are Map 1 and Map 2.
+            m1, m2 = group[-1], group[-2]
+            combined_k = m1["kills"] + m2["kills"]
+            final_series_totals.append(combined_k)
+            total_k += combined_k
+            total_r += (m1["rounds"] + m2["rounds"])
 
-    # --- CALCULATIONS ---
-    kpr = total_kills_all / total_rounds_played if total_rounds_played > 0 else 0.70
-    proj_rounds = 44 if "close" in opponent.lower() or "vitality" in opponent.lower() else 42
+    if not final_series_totals: return "FAIL: Not enough BO3 history."
+
+    # Simulation & Metrics
+    kpr = total_k / total_r if total_r > 0 else 0.80
+    proj_rounds = 44 if any(x in opponent.lower() for x in ["vitality", "g2", "faze", "mouz", "navi"]) else 42
     expected_kills = round(kpr * proj_rounds, 1)
     
-    # 100k Poisson Simulation for Probabilities
     import numpy as np
-    sim_results = np.random.poisson(expected_kills, 100000)
-    over_prob = (np.sum(sim_results > line) / 100000) * 100
-    
-    avg_2map = round(_stats.mean(series_totals), 2)
-    median = _stats.median(series_totals)
-    hits = sum(1 for x in series_totals if x > line)
-    
+    sim = np.random.poisson(expected_kills, 100000)
+    over_prob = (np.sum(sim > line) / 100000) * 100
+    hits = sum(1 for x in final_series_totals if x > line)
+
     return {
         "Player": display,
-        "Recent average": avg_2map,
-        "Recent median": median,
-        "Recent totals": series_totals,
-        "Hit rate": f"{round((hits/len(series_totals))*100, 1)}%",
+        "Recent average": round(_stats.mean(final_series_totals), 2),
+        "Recent median": _stats.median(final_series_totals),
+        "Hit rate": f"{round((hits/len(final_series_totals))*100, 1)}%",
         "Expected kills": expected_kills,
-        "Projected rounds": proj_rounds,
-        "Standard deviation": round(_stats.stdev(series_totals), 2),
-        "Simulated mean": round(np.mean(sim_results), 2),
-        "Over probability": f"{round(over_prob, 1)}%",
-        "Edge vs line": f"{round(over_prob - 50, 1)}%",
-        "Final grade": f"{hits}/{len(series_totals)}",
-        "Recommendation": "OVER" if over_prob > 60 else "UNDER" if over_prob < 40 else "NO BET"
+        "Proj Rounds": proj_rounds,
+        "Edge vs Line": f"{round(over_prob - 52, 1)}%", # 52% is standard implied line
+        "Std Dev": round(_stats.stdev(final_series_totals), 2),
+        "Final grade": f"{hits}/10",
+        "Recent totals": final_series_totals,
+        "Recommendation": "OVER" if over_prob > 62 else "UNDER" if over_prob < 40 else "NO BET"
     }
