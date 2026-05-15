@@ -23,7 +23,7 @@ except ImportError:
 # =========================================================
 # SETTINGS & GLOBALS
 # =========================================================
-PARSER = "html.parser"  # Explicitly using html.parser to avoid lxml issues
+PARSER = "html.parser" 
 HLTV_BASE = "https://www.hltv.org"
 CS2_ID_THRESHOLD = 2366000
 FETCH_TIMEOUT = 25
@@ -52,7 +52,7 @@ def _rotate_session():
     _SESSION = _get_new_session()
 
 # =========================================================
-# FETCH ENGINE (With Diagnostic Logging)
+# FETCH ENGINE
 # =========================================================
 def _fetch(url):
     global _SESSION
@@ -66,41 +66,27 @@ def _fetch(url):
     if SCRAPERAPI_KEY and "search" not in url:
         try:
             proxy_url = f"http://api.scraperapi.com?api_key={SCRAPERAPI_KEY}&url={url}"
-            print(f"SCRAPERAPI FETCH: {url}")
             r = requests.get(proxy_url, timeout=60)
             if r.status_code == 200 and len(r.text) > 1000:
                 return r.text
-            print(f"SCRAPERAPI FAIL: {r.status_code}")
         except Exception as e:
             print(f"SCRAPERAPI ERROR: {e}")
 
     for attempt in range(3):
         try:
-            print(f"FETCHING: {url}")
             r = _SESSION.get(url, headers=headers, timeout=FETCH_TIMEOUT)
-            
-            # Diagnostic logs for debugging Render/Cloudflare blocks
-            print(f"STATUS: {r.status_code} | SIZE: {len(r.text)}")
-            
             if "Just a moment" in r.text or "Checking your browser" in r.text:
-                print("CLOUDFLARE DETECTED - RETRYING")
                 _rotate_session()
                 time.sleep(3)
                 continue
-
             if r.status_code == 200 and len(r.text) > 1000:
                 return r.text
-            
             if r.status_code in [403, 429]:
-                print(f"BLOCKED ({r.status_code}) - Content Snippet: {r.text[:200]}")
                 _rotate_session()
-
             time.sleep(2)
-        except Exception as e:
-            print(f"FETCH ERROR: {e}")
+        except Exception:
             _rotate_session()
             time.sleep(1)
-
     return None
 
 # =========================================================
@@ -108,21 +94,9 @@ def _fetch(url):
 # =========================================================
 def search_player(name: str):
     if not name: return None
-    key = name.lower().strip()
-    
-    # Quick Cache for common stars
-    STATIC = {
-        "donk": ("21167", "donk", "donk"),
-        "zywoo": ("11893", "zywoo", "ZywOo"),
-        "m0nesy": ("19230", "m0nesy", "m0NESY"),
-        "niko": ("3741", "niko", "NiKo")
-    }
-    if key in STATIC: return STATIC[key]
-
     url = f"{HLTV_BASE}/search?query={name}"
     html = _fetch(url)
     if not html: return None
-
     matches = re.findall(r'/player/(\d+)/([\w-]+)', html)
     if not matches: return None
     pid, slug = matches[0]
@@ -132,8 +106,6 @@ def get_player_match_ids(player_id, max_matches=10):
     url = f"{HLTV_BASE}/results?player={player_id}"
     html = _fetch(url)
     if not html: return []
-
-    # Filter for CS2 matches based on ID threshold
     matches = re.findall(r'/matches/(\d+)/([\w-]+)', html)
     seen = set()
     final = []
@@ -141,76 +113,64 @@ def get_player_match_ids(player_id, max_matches=10):
         if int(mid) >= CS2_ID_THRESHOLD and mid not in seen:
             seen.add(mid)
             final.append((mid, slug))
-    
-    print(f"CS2 MATCHES FOUND: {len(final)}")
     return final[:max_matches]
 
 def _parse_match_kills(html, player_slug):
     """
-    Parses individual map stats from a match page.
-    Filters for player rows and extracts Kills, HS, and Rating.
+    SURGICAL FIX: This skips the 'Total Stats' table and grabs individual maps.
     """
     maps_data = []
     try:
         soup = BeautifulSoup(html, PARSER)
-    except Exception as e:
-        print(f"SOUP CRASH: {e}")
+    except:
         return {"maps": []}
 
-    # Locate stat tables specifically to avoid parsing nav/footer noise
-    rows = soup.find_all("tr")
+    # Specifically look for map-specific containers (id="map-stats-1", etc.)
+    # This automatically ignores the summary table at the top.
+    map_containers = soup.find_all("div", {"id": re.compile(r'map-stats-\d+')})
+    
     slug_lower = player_slug.lower()
 
-    for tr in rows:
-        row_text = tr.get_text(" ", strip=True)
-        if slug_lower not in row_text.lower():
-            continue
+    for container in map_containers:
+        rows = container.find_all("tr")
+        for tr in rows:
+            row_text = tr.get_text(" ", strip=True)
+            if slug_lower not in row_text.lower():
+                continue
 
-        # Extraction logic using Regex
-        kills = None
-        kd_match = re.search(r'(\d+)\s*-\s*\d+', row_text)
-        if kd_match:
+            # Extract Kills (K-D format)
+            kd_match = re.search(r'(\d+)\s*-\s*\d+', row_text)
+            if not kd_match: continue
             kills = int(kd_match.group(1))
-        
-        # Fallback if K-D format is missing
-        if kills is None:
-            nums = [int(x) for x in re.findall(r'\d+', row_text) if 0 <= int(x) <= 50]
-            if nums: kills = nums[0]
 
-        if kills is None: continue
+            # Headshots "(12)"
+            hs = 0
+            hs_match = re.search(r'\((\d+)\)', row_text)
+            if hs_match: hs = int(hs_match.group(1))
 
-        # Headshot Extraction: Look for "(12)" pattern next to kills
-        hs = 0
-        hs_match = re.search(r'\((\d+)\)', row_text)
-        if hs_match:
-            hs = int(hs_match.group(1))
+            # Rating
+            rating = 0.0
+            rating_match = re.search(r'(\d\.\d{2})', row_text)
+            if rating_match: rating = float(rating_match.group(1))
 
-        # Rating Extraction: Usually the last decimal in the row (e.g. 1.24)
-        rating = 0.0
-        ratings = re.findall(r'(\d\.\d{2})', row_text)
-        if ratings:
-            try:
-                rating = float(ratings[-1])
-            except: pass
-
-        maps_data.append({"kills": kills, "hs": hs, "rating": rating})
-
+            maps_data.append({"kills": kills, "hs": hs, "rating": rating})
+            # Once we find the player for this map, move to the next map container
+            break 
+            
     return {"maps": maps_data}
 
 # =========================================================
-# CORE LOGIC: GET PLAYER INFO
+# CORE LOGIC: GET PLAYER INFO (GOLD SCAN VERSION)
 # =========================================================
-def get_player_info(player_name, line=None):
+def get_player_info(player_name, line=0.0, opponent="N/A"):
     result = search_player(player_name)
     if not result: return None
 
     pid, slug, display = result
-    print(f"SCANNING: {display} (ID: {pid})")
-
     match_ids = get_player_match_ids(pid, max_matches=10)
     if not match_ids: return None
 
-    all_maps = []
+    all_series = []
     for mid, mslug in match_ids:
         url = f"{HLTV_BASE}/matches/{mid}/{mslug}"
         html = _fetch(url)
@@ -219,51 +179,57 @@ def get_player_info(player_name, line=None):
         parsed = _parse_match_kills(html, slug)
         maps = parsed.get("maps", [])
         
-        # Maps 1-2 only as per gold standard requirement
+        # Only take Maps 1 and 2
         if len(maps) >= 2:
-            all_maps.extend(maps[:2])
-            print(f"ADDED MAPS 1-2 FROM {mslug}")
+            m1 = maps[0]
+            m2 = maps[1]
+            all_series.append({
+                "total_kills": m1["kills"] + m2["kills"],
+                "total_hs": m1["hs"] + m2["hs"],
+                "avg_rating": (m1["rating"] + m2["rating"]) / 2
+            })
         
-        time.sleep(random.uniform(0.5, 1.2))
+        time.sleep(random.uniform(0.5, 1.0))
 
-    if not all_maps:
+    if not all_series:
         print("FAIL: Could not extract data from the recent series.")
         return None
 
-    # Stats Calculations
-    kills = [m["kills"] for m in all_maps]
-    hs_list = [m["hs"] for m in all_maps]
-    ratings = [m["rating"] for m in all_maps]
+    # Calculate Stats on Series Totals (M1+M2)
+    series_totals = [s["total_kills"] for s in all_series]
+    hs_list = [s["total_hs"] for s in all_series]
 
-    # Combined Stats (Maps 1-2)
-    # We group by pairs to get the "Combined" total for the series
-    series_totals = []
-    for i in range(0, len(kills), 2):
-        if i + 1 < len(kills):
-            series_totals.append(kills[i] + kills[i+1])
+    avg_series = round(_stats.mean(series_totals), 2)
+    median_series = _stats.median(series_totals)
+    stdev = round(_stats.stdev(series_totals), 2) if len(series_totals) > 1 else 0
 
-    avg = round(_stats.mean(kills), 2)
-    median = _stats.median(kills)
-    
-    # Hit Rate Calculation if a line is provided
-    hit_rate = 0
-    if line and series_totals:
-        hits = sum(1 for s in series_totals if s > line)
-        hit_rate = f"{hits}/{len(series_totals)}"
+    # Hit Rate Percentage
+    hits = sum(1 for s in series_totals if s > line)
+    hit_rate_pct = round((hits / len(series_totals)) * 100, 1)
+
+    # Simple Recommendation
+    recommendation = "OVER" if median_series > line else "UNDER"
 
     return {
         "Player": display,
-        "Recent average (Per Map)": avg,
-        "Recent median (Per Map)": median,
-        "Recent sample used": f"{len(kills)} maps",
-        "Series Totals (M1+M2)": series_totals,
-        "Hit rate": hit_rate,
+        "Opponent": opponent,
+        "Line (M1+M2)": line,
+        "Recent Avg (2-Map)": avg_series,
+        "Recent Median": median_series,
+        "Hit Rate": f"{hit_rate_pct}%",
         "Avg HS": round(_stats.mean(hs_list), 2) if hs_list else 0,
-        "Avg Rating": round(_stats.mean(ratings), 2) if ratings else 0,
+        "Sample (Series)": len(series_totals),
+        "Standard Dev": stdev,
+        "Final Grade": f"{hits}/{len(series_totals)}",
+        "Recommendation": recommendation,
+        "Recent Totals": series_totals
     }
 
 if __name__ == "__main__":
-    # Test with a line of 35.5 to calculate hit rate
-    data = get_player_info("donk", line=35.5)
-    import json
-    print(json.dumps(data, indent=4))
+    # Example to match your !scan command
+    data = get_player_info("donk", line=32.5, opponent="vitality")
+    
+    if data:
+        print("\n🎯 GOLD SCAN RESULT")
+        import json
+        print(json.dumps(data, indent=4))
