@@ -2,6 +2,7 @@ import re
 import os
 import time
 import random
+import logging  # FIXED: Added missing import to resolve NameError
 import statistics as _stats
 from bs4 import BeautifulSoup
 
@@ -86,7 +87,7 @@ def _parse_match_kills(html, player_slug):
 # CORE FUNCTIONS (Corrected Keys for Display)
 # =========================================================
 def search_player(name: str):
-    """Resolves player IDs"""
+    """FIXED: Explicitly defined for main.py import"""
     key = name.lower().strip()
     STATIC = {"donk": ("21167", "donk", "donk"), "zywoo": ("11893", "zywoo", "ZywOo"), "m0nesy": ("19230", "m0nesy", "m0NESY")}
     if key in STATIC: return STATIC[key]
