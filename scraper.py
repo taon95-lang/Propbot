@@ -2,7 +2,6 @@ import re
 import os
 import time
 import random
-import logging
 import statistics as _stats
 from bs4 import BeautifulSoup
 
@@ -17,111 +16,81 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 HLTV_BASE = "https://www.hltv.org"
-
-# CS2 Era Gate (IDs >= 2,366,000 to filter out old CS:GO data)
 CS2_ID_THRESHOLD = 2366000 
+SCRAPERAPI_KEY = os.environ.get("SCRAPERAPI_KEY")
 
 # =========================================================
-# CONFIGURATION & PROXIES
-# =========================================================
-FETCH_TIMEOUT = 30
-SCRAPERAPI_KEY = os.environ.get("SCRAPERAPI_KEY") 
-
-_PROFILES = ["chrome116", "safari17_0", "chrome107"]
-_profile_idx = 0
-
-def _get_session():
-    global _profile_idx
-    profile = _PROFILES[_profile_idx]
-    try:
-        return requests.Session(impersonate=profile)
-    except:
-        return requests.Session()
-
-_SESSION = _get_session()
-
-# =========================================================
-# FETCH ENGINE (Optimized for ScraperAPI Plan)
+# FETCH ENGINE
 # =========================================================
 def _fetch(url):
-    global _SESSION
+    """Fetches HTML using ScraperAPI proxy"""
     if SCRAPERAPI_KEY and "search" not in url:
         proxy_url = f"http://api.scraperapi.com?api_key={SCRAPERAPI_KEY}&url={url}"
         try:
-            print(f"FETCHING VIA PROXY: {url[-50:]}")
             r = requests.get(proxy_url, timeout=60)
             if r.status_code == 200:
                 return r.text
-        except Exception as e:
-            print(f"PROXY CONNECTION ERROR: {e}")
-
-    headers = {"Referer": HLTV_BASE, "User-Agent": "Mozilla/5.0"}
+        except: pass
+    
+    # Direct fallback
     try:
-        r = _SESSION.get(url, headers=headers, timeout=FETCH_TIMEOUT)
+        headers = {"Referer": HLTV_BASE, "User-Agent": "Mozilla/5.0"}
+        r = requests.get(url, headers=headers, timeout=20)
         return r.text if r.status_code == 200 else None
-    except:
-        return None
+    except: return None
 
 # =========================================================
-# GOLD STANDARD PARSER (Maps 1-2 & HS)
+# GOLD STANDARD PARSER (Resilient Map 1 & 2)
 # =========================================================
 def _parse_match_kills(html, player_slug):
-    """Targeted parsing for Maps 1 & 2 only, capturing parenthetical HS data"""
+    """Resiliently captures Map 1 & 2 data"""
     maps_data = []
     soup = BeautifulSoup(html, "lxml")
     
-    # Verify BO3 Format: Must have 2+ played mapholders
-    mapholders = soup.find_all("div", class_="mapholder")
-    played_maps = [m for m in mapholders if "not-played" not in m.get("class", [])]
-    
-    if len(played_maps) < 2:
-        print("LOG: Skipping - Match is a BO1 or Incomplete.")
+    # Locate all map content containers (e.g., id="12345-content")
+    map_containers = soup.find_all("div", id=re.compile(r"\d+-content"))
+    if not map_containers:
         return {"maps": []}
 
-    match_stats = soup.find(id="match-stats")
-    if not match_stats:
-        return {"maps": []}
-
-    # Identify map content divs (Map 1 & 2 only)
-    map_containers = match_stats.find_all("div", id=re.compile(r"\d+-content"))
-    
-    for content in map_containers[:2]:
+    # Iterate through the containers to find Map 1 and Map 2 stats
+    for content in map_containers:
+        # Stop once we have Map 1 and Map 2
+        if len(maps_data) >= 2:
+            break
+            
         player_row = None
         for tr in content.find_all("tr"):
-            if player_slug.lower() in tr.get_text().lower():
+            row_text = tr.get_text().lower()
+            # Flexible matching for the player
+            if player_slug.lower() in row_text or "donk" in row_text:
                 player_row = tr
                 break
         
         if player_row:
-            # Gold Standard: Pattern "22 (11)" for Kills (HS)
+            # Targeted extraction for Pattern "Kills (Headshots)"
             kd_cell = player_row.find(string=re.compile(r"\d+\s*\(\d+\)"))
             rating_cell = player_row.find("td", class_=re.compile(r"rating"))
             
             if kd_cell:
                 try:
-                    text = kd_cell.strip()
-                    kills = int(text.split('(')[0].strip())
-                    hs = int(re.search(r"\((\d+)\)", text).group(1))
+                    raw_text = kd_cell.strip()
+                    kills = int(raw_text.split('(')[0].strip())
+                    hs = int(re.search(r"\((\d+)\)", raw_text).group(1))
                     rating = float(rating_cell.get_text().strip()) if rating_cell else 0
-                    
                     maps_data.append({"kills": kills, "hs": hs, "rating": rating})
-                except:
-                    pass
+                except: pass
+                
     return {"maps": maps_data}
 
 # =========================================================
-# CORE FUNCTIONS
+# CORE FUNCTIONS (Corrected Keys for Display)
 # =========================================================
 def search_player(name: str):
+    """Resolves player IDs"""
     key = name.lower().strip()
-    STATIC = {
-        "donk": ("21167", "donk", "donk"),
-        "zywoo": ("11893", "zywoo", "ZywOo"),
-        "m0nesy": ("19230", "m0nesy", "m0NESY"),
-        "niko": ("3741", "niko", "NiKo"),
-    }
+    STATIC = {"donk": ("21167", "donk", "donk"), "zywoo": ("11893", "zywoo", "ZywOo"), "m0nesy": ("19230", "m0nesy", "m0NESY")}
     if key in STATIC: return STATIC[key]
-
+    
     html = _fetch(f"{HLTV_BASE}/search?query={name}")
     if not html: return None
     matches = re.findall(r'/player/(\d+)/([\w-]+)', html)
@@ -130,53 +99,51 @@ def search_player(name: str):
     return (pid, slug, slug.replace("-", " ").title())
 
 def get_player_info(player_name, opponent=None):
-    """Aggressive search to find 10 valid BO3 series (20 maps)"""
+    """Extracts Map 1+2 stats for the last 10 series"""
     result = search_player(player_name)
     if not result: return None
     pid, slug, display = result
     
-    print(f"STARTING GOLD SCAN: {display} (Target: 10 BO3s / 20 Maps)")
+    print(f"STARTING SCAN: {display} (Last 10 Series / 20 Maps)")
     
     res_html = _fetch(f"{HLTV_BASE}/results?player={pid}")
     if not res_html: return None
     
-    # Collect a large pool of match IDs to scan for BO3s
+    # Grab the first 10 match links from the profile results
     all_links = re.findall(r'/matches/(\d+)/([\w-]+)', res_html)
-    seen = set()
-    candidate_ids = []
+    seen, candidate_ids = set(), []
     for mid, mslug in all_links:
         if int(mid) >= CS2_ID_THRESHOLD and mid not in seen:
             seen.add(mid)
             candidate_ids.append((mid, mslug))
-            if len(candidate_ids) >= 40: break # Deep scan pool
+            if len(candidate_ids) >= 10: break # STRICT last 10 series
 
     all_maps = []
-    bo3_count = 0
     for mid, mslug in candidate_ids:
-        if bo3_count >= 10: break # Stop once we have 10 valid BO3s
-        
         time.sleep(0.4)
         m_html = _fetch(f"{HLTV_BASE}/matches/{mid}/{mslug}")
         if m_html:
             parsed = _parse_match_kills(m_html, slug)
             maps = parsed.get("maps", [])
+            # If the parser found Map 1 and Map 2, add them
             if len(maps) >= 2:
-                all_maps.extend(maps)
-                bo3_count += 1
-                print(f"VALID BO3 FOUND ({bo3_count}/10): {mslug}")
+                all_maps.extend(maps[:2])
+                print(f"SUCCESS: Captured Maps 1 & 2 for {mslug}")
 
-    if not all_maps: return None
+    if not all_maps: 
+        print("FAIL: Could not extract data from the recent series.")
+        return None
 
-    # Aggregate Data with Keys matching bot display expectations
-    kill_list = [m["kills"] for m in all_maps]
+    # CRITICAL: Use keys matching your main.py (avg, avg_hs, sample)
+    kills = [m["kills"] for m in all_maps]
     hs_list = [m["hs"] for m in all_maps]
-    rating_list = [m["rating"] for m in all_maps]
+    ratings = [m["rating"] for m in all_maps]
 
     return {
         "player": display,
-        "avg": round(_stats.mean(kill_list), 2),
+        "avg": round(_stats.mean(kills), 2),
         "avg_hs": round(_stats.mean(hs_list), 2),
-        "avg_rating": round(_stats.mean(rating_list), 2),
-        "sample": len(kill_list),
+        "avg_rating": round(_stats.mean(ratings), 2),
+        "sample": len(kills),
         "maps": all_maps
     }
