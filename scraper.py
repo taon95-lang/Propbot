@@ -1,3 +1,6 @@
+# =========================================================
+# UPDATED GOLD STANDARD SCRAPER (FINAL CONSOLIDATED)
+# =========================================================
 import re
 import os
 import time
@@ -6,7 +9,6 @@ import logging
 import statistics as _stats
 from bs4 import BeautifulSoup
 
-# Ensure Real-time logging for Render/GitHub dashboard visibility
 import functools
 print = functools.partial(print, flush=True)
 
@@ -17,13 +19,8 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 HLTV_BASE = "https://www.hltv.org"
-
-# CS2 Era Gate (IDs >= 2,366,000 to filter out old CS:GO data)
 CS2_ID_THRESHOLD = 2366000 
 
-# =========================================================
-# CONFIGURATION & PROXIES
-# =========================================================
 FETCH_TIMEOUT = 30
 SCRAPERAPI_KEY = os.environ.get("SCRAPERAPI_KEY") 
 
@@ -33,16 +30,11 @@ _profile_idx = 0
 def _get_session():
     global _profile_idx
     profile = _PROFILES[_profile_idx]
-    try:
-        return requests.Session(impersonate=profile)
-    except:
-        return requests.Session()
+    try: return requests.Session(impersonate=profile)
+    except: return requests.Session()
 
 _SESSION = _get_session()
 
-# =========================================================
-# FETCH ENGINE (Optimized for ScraperAPI Plan)
-# =========================================================
 def _fetch(url):
     global _SESSION
     if SCRAPERAPI_KEY and "search" not in url:
@@ -50,39 +42,26 @@ def _fetch(url):
         try:
             print(f"FETCHING VIA PROXY: {url[-50:]}")
             r = requests.get(proxy_url, timeout=60)
-            if r.status_code == 200:
-                return r.text
-        except Exception as e:
-            print(f"PROXY CONNECTION ERROR: {e}")
+            if r.status_code == 200: return r.text
+        except: pass
 
     headers = {"Referer": HLTV_BASE, "User-Agent": "Mozilla/5.0"}
     try:
         r = _SESSION.get(url, headers=headers, timeout=FETCH_TIMEOUT)
         return r.text if r.status_code == 200 else None
-    except:
-        return None
+    except: return None
 
-# =========================================================
-# GOLD STANDARD PARSER (Maps 1-2 & HS)
-# =========================================================
 def _parse_match_kills(html, player_slug):
     """Targeted parsing for Maps 1 & 2 only, capturing parenthetical HS data"""
     maps_data = []
     soup = BeautifulSoup(html, "lxml")
-    
-    # Verify BO3 Format
-    mapholders = soup.find_all("div", class_="mapholder")
-    if len(mapholders) < 2:
-        return {"maps": []}
+    if len(soup.find_all("div", class_="mapholder")) < 2: return {"maps": []}
 
     match_stats = soup.find(id="match-stats")
-    if not match_stats:
-        return {"maps": []}
+    if not match_stats: return {"maps": []}
 
-    # Identify map content divs (Map 1 & 2 only)
     map_containers = match_stats.find_all("div", id=re.compile(r"\d+-content"))
-    
-    for content in map_containers[:2]:
+    for content in map_containers[:2]: # Strict Maps 1 & 2
         player_row = None
         for tr in content.find_all("tr"):
             if player_slug.lower() in tr.get_text().lower():
@@ -93,33 +72,21 @@ def _parse_match_kills(html, player_slug):
             # Pattern: "22 (11)" for Kills (HS)
             kd_cell = player_row.find(string=re.compile(r"\d+\s*\(\d+\)"))
             rating_cell = player_row.find("td", class_=re.compile(r"rating"))
-            
             if kd_cell:
                 try:
                     text = kd_cell.strip()
                     kills = int(text.split('(')[0].strip())
                     hs = int(re.search(r"\((\d+)\)", text).group(1))
                     rating = float(rating_cell.get_text().strip()) if rating_cell else 0
-                    
                     maps_data.append({"kills": kills, "hs": hs, "rating": rating})
-                except:
-                    pass
+                except: pass
     return {"maps": maps_data}
 
-# =========================================================
-# CORE FUNCTIONS
-# =========================================================
 def search_player(name: str):
-    """Required for main.py to resolve IDs and slugs"""
+    """Required for main.py to resolve IDs"""
     key = name.lower().strip()
-    STATIC = {
-        "donk": ("21167", "donk", "donk"),
-        "zywoo": ("11893", "zywoo", "ZywOo"),
-        "m0nesy": ("19230", "m0nesy", "m0NESY"),
-        "niko": ("3741", "niko", "NiKo"),
-    }
+    STATIC = {"donk": ("21167", "donk", "donk"), "zywoo": ("11893", "zywoo", "ZywOo"), "m0nesy": ("19230", "m0nesy", "m0NESY")}
     if key in STATIC: return STATIC[key]
-
     html = _fetch(f"{HLTV_BASE}/search?query={name}")
     if not html: return None
     matches = re.findall(r'/player/(\d+)/([\w-]+)', html)
@@ -128,17 +95,14 @@ def search_player(name: str):
     return (pid, slug, slug.replace("-", " ").title())
 
 def get_player_info(player_name, opponent=None):
-    """Primary entry point for the bot"""
+    """Primary entry point returning keys bot expects"""
     result = search_player(player_name)
     if not result: return None
     pid, slug, display = result
     
-    print(f"STARTING GOLD SCAN: {display} (Last 10 BO3s)")
-    
     res_html = _fetch(f"{HLTV_BASE}/results?player={pid}")
     if not res_html: return None
     
-    # Filter for CS2 IDs and extract links
     all_links = re.findall(r'/matches/(\d+)/([\w-]+)', res_html)
     seen = set()
     match_ids = []
@@ -146,7 +110,7 @@ def get_player_info(player_name, opponent=None):
         if int(mid) >= CS2_ID_THRESHOLD and mid not in seen:
             seen.add(mid)
             match_ids.append((mid, mslug))
-            if len(match_ids) >= 10: break # Analyzes Last 10 BO3 matches
+            if len(match_ids) >= 10: break # Analyzes Last 10 BO3 series
 
     all_maps = []
     for mid, mslug in match_ids:
@@ -158,7 +122,7 @@ def get_player_info(player_name, opponent=None):
 
     if not all_maps: return None
 
-    # Aggregate Data with Keys matching main.py's expectations
+    # RENAMED KEYS TO MATCH main.py EXPECTATIONS
     kill_list = [m["kills"] for m in all_maps]
     hs_list = [m["hs"] for m in all_maps]
     rating_list = [m["rating"] for m in all_maps]
@@ -166,8 +130,8 @@ def get_player_info(player_name, opponent=None):
     return {
         "player": display,
         "avg": round(_stats.mean(kill_list), 2),
-        "avg_hs": round(_stats.mean(hs_list), 2),
+        "avg_hs": round(_stats.mean(hs_list), 2), # Corrected for count, not %
         "avg_rating": round(_stats.mean(rating_list), 2),
-        "sample": len(kill_list), # Will now show 20 if 10 BO3s were found
+        "sample": len(kill_list), # Shows 20 maps for 10 BO3s
         "maps": all_maps
     }
