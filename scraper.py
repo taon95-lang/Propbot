@@ -6,7 +6,7 @@ import logging
 import statistics as _stats
 from bs4 import BeautifulSoup
 
-# Ensure Real-time logging for Render/GitHub environment visibility
+# Ensure Real-time logging for Render/GitHub dashboard visibility
 import functools
 print = functools.partial(print, flush=True)
 
@@ -40,14 +40,8 @@ def _get_session():
 
 _SESSION = _get_session()
 
-def _rotate_session():
-    global _SESSION, _profile_idx
-    _profile_idx = (_profile_idx + 1) % len(_PROFILES)
-    _SESSION = _get_session()
-    print(f"ROTATING PROFILE -> {_PROFILES[_profile_idx]}")
-
 # =========================================================
-# FETCH ENGINE (Optimized for ScraperAPI)
+# FETCH ENGINE (Optimized for ScraperAPI Plan)
 # =========================================================
 def _fetch(url):
     global _SESSION
@@ -64,8 +58,6 @@ def _fetch(url):
     headers = {"Referer": HLTV_BASE, "User-Agent": "Mozilla/5.0"}
     try:
         r = _SESSION.get(url, headers=headers, timeout=FETCH_TIMEOUT)
-        if "Just a moment" in r.text or r.status_code == 403:
-            _rotate_session()
         return r.text if r.status_code == 200 else None
     except:
         return None
@@ -115,9 +107,10 @@ def _parse_match_kills(html, player_slug):
     return {"maps": maps_data}
 
 # =========================================================
-# CORE LOGIC (Updated for 10 Matches / 20 Maps)
+# CORE FUNCTIONS
 # =========================================================
 def search_player(name: str):
+    """Required for main.py to resolve IDs and slugs"""
     key = name.lower().strip()
     STATIC = {
         "donk": ("21167", "donk", "donk"),
@@ -135,6 +128,7 @@ def search_player(name: str):
     return (pid, slug, slug.replace("-", " ").title())
 
 def get_player_info(player_name, opponent=None):
+    """Primary entry point for the bot"""
     result = search_player(player_name)
     if not result: return None
     pid, slug, display = result
@@ -152,7 +146,7 @@ def get_player_info(player_name, opponent=None):
         if int(mid) >= CS2_ID_THRESHOLD and mid not in seen:
             seen.add(mid)
             match_ids.append((mid, mslug))
-            if len(match_ids) >= 10: break # Analyzes Last 10 BO3 series
+            if len(match_ids) >= 10: break # Analyzes Last 10 BO3 matches
 
     all_maps = []
     for mid, mslug in match_ids:
@@ -164,19 +158,16 @@ def get_player_info(player_name, opponent=None):
 
     if not all_maps: return None
 
+    # Aggregate Data with Keys matching main.py's expectations
     kill_list = [m["kills"] for m in all_maps]
     hs_list = [m["hs"] for m in all_maps]
     rating_list = [m["rating"] for m in all_maps]
 
-    # Return keys configured for bot display
     return {
         "player": display,
-        "avg": round(_stats.mean(kill_list), 2), # Combined Maps 1+2 average
+        "avg": round(_stats.mean(kill_list), 2),
         "avg_hs": round(_stats.mean(hs_list), 2),
         "avg_rating": round(_stats.mean(rating_list), 2),
-        "sample": len(kill_list), # Should show 20 if 10 BO3s were found
+        "sample": len(kill_list), # Will now show 20 if 10 BO3s were found
         "maps": all_maps
     }
-
-if __name__ == "__main__":
-    print(get_player_info("donk"))
