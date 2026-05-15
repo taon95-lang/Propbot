@@ -1,235 +1,121 @@
 import re
 import os
 import time
-import random
-import logging
 import statistics as _stats
 import functools
+import random
 from bs4 import BeautifulSoup
 
-# =========================================================
-# REALTIME PRINTS FOR RENDER
-# =========================================================
 print = functools.partial(print, flush=True)
 
-# =========================================================
-# REQUESTS (CURL_CFFI for TLS Impersonation)
-# =========================================================
 try:
     from curl_cffi import requests as requests
 except ImportError:
     import requests
 
-# =========================================================
-# SETTINGS & GLOBALS
-# =========================================================
-PARSER = "html.parser" 
 HLTV_BASE = "https://www.hltv.org"
-CS2_ID_THRESHOLD = 2366000
-FETCH_TIMEOUT = 25
 SCRAPERAPI_KEY = os.environ.get("SCRAPERAPI_KEY")
 
-_PROFILES = ["chrome116", "chrome110", "chrome107", "chrome99"]
-_profile_idx = 0
-
-# =========================================================
-# SESSION MANAGEMENT
-# =========================================================
-def _get_new_session():
-    global _profile_idx
-    profile = _PROFILES[_profile_idx]
-    try:
-        return requests.Session(impersonate=profile)
-    except:
-        return requests.Session()
-
-_SESSION = _get_new_session()
-
-def _rotate_session():
-    global _SESSION, _profile_idx
-    _profile_idx = (_profile_idx + 1) % len(_PROFILES)
-    print(f"ROTATING PROFILE -> {_PROFILES[_profile_idx]}")
-    _SESSION = _get_new_session()
-
-# =========================================================
-# FETCH ENGINE (ScraperAPI enabled for all)
-# =========================================================
 def _fetch(url):
-    global _SESSION
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": HLTV_BASE,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    }
-
-    # FIX: Use ScraperAPI for EVERYTHING, especially searches
-    if SCRAPERAPI_KEY:
-        try:
-            proxy_url = f"http://api.scraperapi.com?api_key={SCRAPERAPI_KEY}&url={url}&render=false"
-            r = requests.get(proxy_url, timeout=60)
-            if r.status_code == 200 and len(r.text) > 1000:
-                return r.text, r.url # Return text AND the final URL
-            print(f"SCRAPERAPI FAIL: {r.status_code}")
-        except Exception as e:
-            print(f"SCRAPERAPI ERROR: {e}")
-
-    for attempt in range(3):
-        try:
-            r = _SESSION.get(url, headers=headers, timeout=FETCH_TIMEOUT)
-            if "Just a moment" in r.text or "Checking your browser" in r.text:
-                _rotate_session()
-                time.sleep(3)
-                continue
-            if r.status_code == 200 and len(r.text) > 1000:
-                return r.text, r.url
-            if r.status_code in [403, 429]:
-                _rotate_session()
-            time.sleep(2)
-        except:
-            _rotate_session()
-            time.sleep(1)
+    if not SCRAPERAPI_KEY: return None, None
+    proxy_url = f"http://api.scraperapi.com?api_key={SCRAPERAPI_KEY}&url={url}&country_code=us"
+    try:
+        r = requests.get(proxy_url, timeout=60)
+        if r.status_code == 200:
+            return r.text, r.headers.get("Sa-Final-Url", url)
+    except Exception as e:
+        print(f"FETCH ERROR: {e}")
     return None, None
 
-# =========================================================
-# RESILIENT SEARCH
-# =========================================================
 def search_player(name: str):
-    if not name: return None
-    
-    url = f"{HLTV_BASE}/search?query={name.strip()}"
-    html, final_url = _fetch(url)
+    name_clean = name.lower().strip()
+    # STATIC CACHE: Instant results for common stars
+    STATIC = {
+        "donk": ("21167", "donk"),
+        "zywoo": ("11893", "zywoo"),
+        "m0nesy": ("19230", "m0nesy"),
+        "niko": ("3741", "niko"),
+        "elkera": ("21126", "elkera")
+    }
+    if name_clean in STATIC: return STATIC[name_clean][0], STATIC[name_clean][1], STATIC[name_clean][1].title()
+
+    html, final_url = _fetch(f"{HLTV_BASE}/search?query={name_clean}")
     if not html: return None
+    
+    if "/player/" in final_url:
+        m = re.search(r'/player/(\d+)/([^/]+)', final_url)
+        if m: return m.group(1), m.group(2), m.group(2).title()
 
-    # FIX: Check if we were redirected straight to a player profile
-    # Final URL looks like: https://www.hltv.org/player/21167/donk
-    redirect_match = re.search(r'/player/(\d+)/([^/]+)', final_url)
-    if redirect_match:
-        pid, slug = redirect_match.groups()
-        return (pid, slug, slug.replace("-", " ").title())
-
-    # Pattern 1: Standard search results list
     matches = re.findall(r'/player/(\d+)/([^"]+)', html)
-    
-    # Pattern 2: Stats links
-    if not matches:
-        matches = re.findall(r'/stats/players/(\d+)/([^"]+)', html)
+    if matches:
+        pid, slug = matches[0]
+        return pid, slug, slug.replace("-", " ").title()
+    return None
 
-    if not matches:
-        print(f"SEARCH FAILED: No matches found for {name}")
-        return None
-
-    pid, slug = matches[0]
-    slug = slug.split('?')[0].split('&')[0] # Clean slug
-    return (pid, slug, slug.replace("-", " ").title())
-
-# =========================================================
-# ACCURATE PARSING
-# =========================================================
-def _parse_match_kills(html, player_slug):
-    maps_data = []
-    soup = BeautifulSoup(html, PARSER)
-    map_containers = soup.find_all("div", {"id": re.compile(r'map-stats-\d+')})
-    
-    if not map_containers:
-        map_containers = soup.find_all("table", {"class": "stats-table"})
-
-    slug_lower = player_slug.lower()
-
-    for container in map_containers:
-        # Round detection
-        rounds = 24
-        header = container.find_previous("div", {"class": "bold"})
-        if header:
-            nums = re.findall(r'\d+', header.text)
-            if len(nums) >= 2: rounds = sum(int(n) for n in nums)
-
-        rows = container.find_all("tr")
-        for tr in rows:
-            row_text = tr.get_text(" ", strip=True).lower()
-            if slug_lower not in row_text:
-                continue
-
-            kd_match = re.search(r'(\d+)\s*-\s*\d+', tr.get_text())
-            if not kd_match: continue
-            kills = int(kd_match.group(1))
-
-            hs = 0
-            hs_match = re.search(r'\((\d+)\)', tr.get_text())
-            if hs_match: hs = int(hs_match.group(1))
-
-            rating = 1.0
-            r_match = re.search(r'(\d\.\d{2})', tr.get_text())
-            if r_match: rating = float(r_match.group(1))
-
-            maps_data.append({"kills": kills, "hs": hs, "rating": rating, "rounds": rounds})
-            break 
-            
-    return {"maps": maps_data}
-
-# =========================================================
-# THE GOLD SCAN
-# =========================================================
 def get_player_info(player_name, line=0.0, opponent="N/A"):
-    result = search_player(player_name)
-    if not result:
-        print(f"SEARCH ERROR: Could not find player '{player_name}'")
-        return None
-
-    pid, slug, display = result
-    print(f"SCANNING: {display} (ID: {pid})")
+    search_res = search_player(player_name)
+    if not search_res: return "FAIL: Player not found."
+    pid, slug, display = search_res
     
-    # Get last 10 series
-    url = f"{HLTV_BASE}/results?player={pid}"
-    res_html, _ = _fetch(url)
-    if not res_html: return None
-    match_ids = re.findall(r'/matches/(\d+)/([\w-]+)', res_html)[:10]
+    # FETCH ALL HISTORY IN ONE GO
+    stats_url = f"{HLTV_BASE}/stats/players/matches/{pid}/{slug}"
+    html, _ = _fetch(stats_url)
+    if not html: return "FAIL: Stats page blocked."
 
-    all_series = []
-    for mid, mslug in match_ids:
-        m_html, _ = _fetch(f"{HLTV_BASE}/matches/{mid}/{mslug}")
-        if not m_html: continue
-        parsed = _parse_match_kills(m_html, slug)
-        maps = parsed.get("maps", [])
-        
-        if len(maps) >= 2:
-            m1, m2 = maps[0], maps[1]
-            all_series.append({
-                "kills": m1["kills"] + m2["kills"],
-                "hs": m1["hs"] + m2["hs"],
-                "rounds": m1["rounds"] + m2["rounds"]
-            })
-        time.sleep(0.5)
-
-    if not all_series: return None
-
-    totals = [s["kills"] for s in all_series]
-    avg_series = round(_stats.mean(totals), 2)
-    median_series = _stats.median(totals)
-    stdev = round(_stats.stdev(totals), 2) if len(totals) > 1 else 0
-    kpr = round(sum(s["kills"] for s in all_series) / sum(s["rounds"] for s in all_series), 2)
+    soup = BeautifulSoup(html, "html.parser")
+    rows = soup.find("table", {"class": "stats-table"}).find("tbody").find_all("tr")
     
-    # Simple Round Projection
-    proj_rounds = 44 if "close" in opponent.lower() else 42
+    series_map = {}
+    total_rounds_played = 0
+    total_kills_all = 0
+
+    for row in rows:
+        cols = row.find_all("td")
+        date, opp, m_name, kd = cols[0].text, cols[1].text.lower(), cols[2].text, cols[4].text
+        # Extract rounds from the 'Result' column (e.g., "13 - 7")
+        res_text = cols[3].text
+        r_nums = re.findall(r'\d+', res_text)
+        m_rounds = sum(int(n) for n in r_nums) if len(r_nums) >= 2 else 24
+
+        try:
+            kills = int(kd.split("-")[0].strip())
+            key = f"{date}_{opp}"
+            if key not in series_map: series_map[key] = []
+            if len(series_map[key]) < 2:
+                series_map[key].append(kills)
+                total_rounds_played += m_rounds
+                total_kills_all += kills
+        except: continue
+
+    series_totals = [sum(m) for m in series_map.values() if len(m) == 2][:10]
+    if not series_totals: return "FAIL: No BO3 data found."
+
+    # --- CALCULATIONS ---
+    kpr = total_kills_all / total_rounds_played if total_rounds_played > 0 else 0.70
+    proj_rounds = 44 if "close" in opponent.lower() or "vitality" in opponent.lower() else 42
     expected_kills = round(kpr * proj_rounds, 1)
-    hits = sum(1 for t in totals if t > line)
-    hit_rate = round((hits / len(totals)) * 100, 1)
+    
+    # 100k Poisson Simulation for Probabilities
+    import numpy as np
+    sim_results = np.random.poisson(expected_kills, 100000)
+    over_prob = (np.sum(sim_results > line) / 100000) * 100
+    
+    avg_2map = round(_stats.mean(series_totals), 2)
+    median = _stats.median(series_totals)
+    hits = sum(1 for x in series_totals if x > line)
     
     return {
         "Player": display,
-        "Match": f"vs {opponent}",
-        "Prop": f"{line} Kills (M1+M2)",
-        "Recent average": avg_series,
-        "Recent median": median_series,
-        "Hit rate": f"{hit_rate}%",
-        "Projected rounds": proj_rounds,
+        "Recent average": avg_2map,
+        "Recent median": median,
+        "Recent totals": series_totals,
+        "Hit rate": f"{round((hits/len(series_totals))*100, 1)}%",
         "Expected kills": expected_kills,
-        "Standard deviation": stdev,
-        "Final grade": f"{hits}/{len(totals)}",
-        "Recommendation": "OVER" if expected_kills > line and hit_rate > 60 else "UNDER",
-        "Recent totals": totals
+        "Projected rounds": proj_rounds,
+        "Standard deviation": round(_stats.stdev(series_totals), 2),
+        "Simulated mean": round(np.mean(sim_results), 2),
+        "Over probability": f"{round(over_prob, 1)}%",
+        "Edge vs line": f"{round(over_prob - 50, 1)}%",
+        "Final grade": f"{hits}/{len(series_totals)}",
+        "Recommendation": "OVER" if over_prob > 60 else "UNDER" if over_prob < 40 else "NO BET"
     }
-
-if __name__ == "__main__":
-    data = get_player_info("donk", line=32.5, opponent="Vitality")
-    if data:
-        print(data)
