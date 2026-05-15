@@ -1,12 +1,10 @@
 import os
 import discord
-import statistics as _stats
+import asyncio
+import functools
 from discord.ext import commands
-from scraper import search_player, get_player_info
+from scraper import get_player_info
 
-# =====================================================
-# BOT SETUP
-# =====================================================
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -15,76 +13,52 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 async def on_ready():
     print(f"✅ Logged in as {bot.user}", flush=True)
 
-# =====================================================
-# SCAN COMMAND (UPDATED FOR GOLD STANDARD)
-# =====================================================
 @bot.command()
-async def scan(ctx, player=None, line=None, opponent=None):
-    try:
-        if not player or not line or not opponent:
-            return await ctx.send("❌ Usage: !scan player line opponent")
+async def scan(ctx, player=None, line=None, opponent="N/A"):
+    if not player or not line:
+        return await ctx.send("❌ Usage: `!scan name line opponent`")
 
-        await ctx.send(f"🔎 Scanning {player} for line {line} vs {opponent}...")
-        
-        # 1. Fetch Gold Standard Data
-        data = get_player_info(player, opponent)
-        if not data:
-            return await ctx.send("❌ No player data found.")
+    status_msg = await ctx.send(f"🔎 **Scanning {player} for line {line} vs {opponent}...**")
+    
+    async with ctx.typing():
+        try:
+            line_float = float(line)
+            # Run the heavy scraper in a background thread to prevent timeout
+            data = await asyncio.to_thread(get_player_info, player, line_float, opponent)
 
-        # 2. Extract Data
-        avg = data.get("avg", 0)
-        avg_hs = data.get("avg_hs", 0)
-        maps = data.get("maps", [])
-        line_float = float(line)
+            if isinstance(data, str) and "FAIL" in data:
+                return await status_msg.edit(content=f"❌ {data}")
 
-        # 3. Group Maps into Series (Combined Maps 1+2 Total)
-        # This fixes the 0% hit rate bug
-        series_totals = []
-        for i in range(0, len(maps), 2):
-            if i + 1 < len(maps):
-                combined = maps[i]["kills"] + maps[i+1]["kills"]
-                series_totals.append(combined)
+            # Grading Logic
+            grade_val = int(data['Final grade'].split('/')[0])
+            recommendation = data['Recommendation']
+            
+            # Embed Color: Green for Over, Red for Under, Gray for No Bet
+            color = 0x00ff00 if "OVER" in recommendation else 0xff0000 if "UNDER" in recommendation else 0x808080
+            
+            embed = discord.Embed(title=f"🎯 {data['Player'].upper()} GOLD SCAN", color=color)
+            embed.add_field(name="👤 Player", value=data['Player'], inline=True)
+            embed.add_field(name="⚔️ Opponent", value=opponent, inline=True)
+            embed.add_field(name="🎯 Line (M1+M2)", value=f"**{line}**", inline=True)
+            
+            embed.add_field(name="📊 Recent Avg (2-Map)", value=data['Recent average'], inline=True)
+            embed.add_field(name="📈 Recent Median", value=data['Recent median'], inline=True)
+            embed.add_field(name="🔥 Hit Rate", value=data['Hit rate'], inline=True)
+            
+            embed.add_field(name="🔫 Expected Kills", value=data['Expected kills'], inline=True)
+            embed.add_field(name="⏳ Proj Rounds", value=data['Projected rounds'], inline=True)
+            embed.add_field(name="📐 Edge vs Line", value=data['Edge vs line'], inline=True)
 
-        # 4. Calculate Critical Metrics
-        median = _stats.median(series_totals) if series_totals else 0
-        stdev = _stats.stdev(series_totals) if len(series_totals) > 1 else 0
-        hits = sum(1 for total in series_totals if total > line_float)
-        hit_rate = round((hits / len(series_totals)) * 100, 1) if series_totals else 0
-        edge = round((avg * 2) - line_float, 2) # avg is per-map, line is 2-map
+            embed.add_field(name="📉 Std Dev", value=data['Standard deviation'], inline=True)
+            embed.add_field(name="✅ Final Grade", value=f"**{data['Final grade']}**", inline=True)
+            embed.add_field(name="💰 Recommendation", value=f"**{recommendation}**", inline=True)
+            
+            embed.add_field(name="📋 Recent Totals (M1+M2)", value=f"`{data['Recent totals']}`", inline=False)
+            embed.set_footer(text="Simulation: 100k runs | Maps 1-2 Only")
 
-        # 5. Final Decision Logic
-        # Rules: Over if avg/median are far above line and hit rate is strong.
-        recommendation = "No Bet"
-        grade = "5/10"
-        if (avg * 2) > line_float + 2 and median > line_float and hit_rate >= 70:
-            recommendation = "OVER"
-            grade = "8/10"
-        elif (avg * 2) < line_float - 2 and median < line_float:
-            recommendation = "UNDER"
-            grade = "8/10"
+            await status_msg.edit(content=None, embed=embed)
 
-        # 6. Build the Gold Standard Embed
-        embed = discord.Embed(title=f"🎯 {player.upper()} GOLD SCAN", color=0x00ff00)
-        embed.add_field(name="👤 Player", value=data['player'], inline=True)
-        embed.add_field(name="⚔️ Opponent", value=opponent, inline=True)
-        embed.add_field(name="🎯 Line (M1+M2)", value=line, inline=True)
-        
-        embed.add_field(name="📊 Recent Avg (2-Map)", value=round(avg * 2, 2), inline=True)
-        embed.add_field(name="📈 Recent Median", value=median, inline=True)
-        embed.add_field(name="🔥 Hit Rate", value=f"{hit_rate}%", inline=True)
-        
-        embed.add_field(name="💥 Avg HS", value=avg_hs, inline=True)
-        embed.add_field(name="🧪 Sample (Series)", value=len(series_totals), inline=True)
-        embed.add_field(name="📉 Standard Dev", value=round(stdev, 2), inline=True)
-
-        embed.add_field(name="✅ Final Grade", value=f"**{grade}**", inline=True)
-        embed.add_field(name="💰 Recommendation", value=f"**{recommendation}**", inline=True)
-        embed.add_field(name="📋 Recent Totals", value=", ".join(map(str, series_totals)), inline=False)
-
-        await ctx.send(embed=embed)
-
-    except Exception as e:
-        print(f"SCAN ERROR: {e}", flush=True)
-        await ctx.send(f"❌ Scan crashed: {e}")
+        except Exception as e:
+            await status_msg.edit(content=f"❌ Scan error: {e}")
 
 bot.run(os.getenv("DISCORD_TOKEN"))
