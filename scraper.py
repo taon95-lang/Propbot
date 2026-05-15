@@ -6,6 +6,9 @@ import functools
 import random
 from bs4 import BeautifulSoup
 
+# =========================================================
+# REALTIME PRINTS FOR RENDER
+# =========================================================
 print = functools.partial(print, flush=True)
 
 try:
@@ -16,45 +19,87 @@ except ImportError:
 HLTV_BASE = "https://www.hltv.org"
 SCRAPERAPI_KEY = os.environ.get("SCRAPERAPI_KEY")
 
-def _fetch(url):
-    if not SCRAPERAPI_KEY: return None, None
-    proxy_url = f"http://api.scraperapi.com?api_key={SCRAPERAPI_KEY}&url={url}&country_code=us"
+# =========================================================
+# FETCH ENGINE (With JS Rendering & Diagnostic Logs)
+# =========================================================
+def _fetch(url, render=False):
+    if not SCRAPERAPI_KEY: 
+        print("CRITICAL: SCRAPERAPI_KEY is missing from environment variables.")
+        return None, None
+    
+    # Enable javascript rendering for high-security stats pages
+    render_param = "&render=true" if render else ""
+    proxy_url = f"http://api.scraperapi.com?api_key={SCRAPERAPI_KEY}&url={url}{render_param}&country_code=us"
+    
     try:
+        print(f"FETCHING START: {url} (JS_Render={render})")
         r = requests.get(proxy_url, timeout=60)
-        if r.status_code == 200:
+        
+        print(f"SCRAPERAPI STATUS: {r.status_code} | HTML SIZE: {len(r.text) if r.text else 0}")
+        
+        if r.status_code == 200 and len(r.text) > 1000:
             return r.text, r.headers.get("Sa-Final-Url", url)
+            
+        if r.status_code == 403:
+            print("SCRAPERAPI Error 403: IP blocked or account out of credits.")
+        elif r.status_code == 429:
+            print("SCRAPERAPI Error 429: Too many concurrent requests.")
+            
     except Exception as e:
-        print(f"FETCH ERROR: {e}")
+        print(f"FETCH EXCEPTION ERROR: {e}")
+        
     return None, None
 
+# =========================================================
+# RESILIENT SEARCH
+# =========================================================
 def search_player(name: str):
     name_clean = name.lower().strip()
-    STATIC = {"donk": ("21167", "donk"), "zywoo": ("11893", "zywoo"), "m0nesy": ("19230", "m0nesy"), "niko": ("3741", "niko")}
-    if name_clean in STATIC: return STATIC[name_clean][0], STATIC[name_clean][1], STATIC[name_clean][1].title()
+    
+    # Static Cache to skip searching for main star players entirely
+    STATIC = {
+        "donk": ("21167", "donk"), 
+        "zywoo": ("11893", "zywoo"), 
+        "m0nesy": ("19230", "m0nesy"), 
+        "niko": ("3741", "niko")
+    }
+    if name_clean in STATIC: 
+        return STATIC[name_clean][0], STATIC[name_clean][1], STATIC[name_clean][1].title()
 
-    html, final_url = _fetch(f"{HLTV_BASE}/search?query={name_clean}")
+    # Search page doesn't usually need JS render
+    html, final_url = _fetch(f"{HLTV_BASE}/search?query={name_clean}", render=False)
     if not html: return None
+    
     if "/player/" in final_url:
         m = re.search(r'/player/(\d+)/([^/]+)', final_url)
         if m: return m.group(1), m.group(2), m.group(2).title()
+        
     matches = re.findall(r'/player/(\d+)/([^"]+)', html)
     if matches:
         pid, slug = matches[0]
         return pid, slug, slug.replace("-", " ").title()
     return None
 
+# =========================================================
+# THE GOLD SCAN ENGINE
+# =========================================================
 def get_player_info(player_name, line=0.0, opponent="N/A"):
     search_res = search_player(player_name)
-    if not search_res: return "FAIL: Player not found."
+    if not search_res: return "FAIL: Player not found on HLTV."
     pid, slug, display = search_res
     
-    # FETCH HISTORY (One request for speed)
+    # Force JS rendering here to smash through Cloudflare's stats wall
     stats_url = f"{HLTV_BASE}/stats/players/matches/{pid}/{slug}"
-    html, _ = _fetch(stats_url)
-    if not html: return "FAIL: Stats page blocked."
+    html, _ = _fetch(stats_url, render=True)
+    if not html: return "FAIL: Stats page blocked by Cloudflare bypass failure."
 
     soup = BeautifulSoup(html, "html.parser")
-    rows = soup.find("table", {"class": "stats-table"}).find("tbody").find_all("tr")
+    table = soup.find("table", {"class": "stats-table"})
+    if not table:
+        print("DEBUG ERROR: Found page, but class 'stats-table' was missing.")
+        return "FAIL: Stats page structure layout changed."
+        
+    rows = table.find("tbody").find_all("tr")
     
     series_groups = []
     current_key = None
@@ -77,6 +122,7 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
                 current_key, current_maps = key, []
             current_maps.append({"kills": kills, "rounds": m_rounds})
         except: continue
+        
     if current_maps: series_groups.append(current_maps)
 
     final_series_totals = []
@@ -85,16 +131,16 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
     for group in series_groups:
         if len(final_series_totals) >= 10: break
         if len(group) >= 2:
-            # Table is newest-to-oldest. Last two are Map 1 and Map 2.
             m1, m2 = group[-1], group[-2]
             combined_k = m1["kills"] + m2["kills"]
             final_series_totals.append(combined_k)
             total_k += combined_k
             total_r += (m1["rounds"] + m2["rounds"])
 
-    if not final_series_totals: return "FAIL: Not enough BO3 history."
+    if not final_series_totals: 
+        return "FAIL: Not enough multi-map series history found."
 
-    # Simulation & Metrics
+    # Statistical Projections
     kpr = total_k / total_r if total_r > 0 else 0.80
     proj_rounds = 44 if any(x in opponent.lower() for x in ["vitality", "g2", "faze", "mouz", "navi"]) else 42
     expected_kills = round(kpr * proj_rounds, 1)
@@ -111,7 +157,7 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
         "Hit rate": f"{round((hits/len(final_series_totals))*100, 1)}%",
         "Expected kills": expected_kills,
         "Proj Rounds": proj_rounds,
-        "Edge vs Line": f"{round(over_prob - 52, 1)}%", # 52% is standard implied line
+        "Edge vs Line": f"{round(over_prob - 52, 1)}%", 
         "Std Dev": round(_stats.stdev(final_series_totals), 2),
         "Final grade": f"{hits}/10",
         "Recent totals": final_series_totals,
