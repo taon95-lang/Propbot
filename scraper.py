@@ -24,14 +24,10 @@ except ImportError:
     import requests
 
 # =========================================================
-# BEAUTIFULSOUP PARSER FIX
+# PARSER
 # =========================================================
 
-try:
-    import lxml
-    PARSER = "lxml"
-except:
-    PARSER = "html.parser"
+PARSER = "html.parser"
 
 # =========================================================
 # LOGGING
@@ -191,10 +187,6 @@ def _fetch(url):
                 f"STATUS: {r.status_code}"
             )
 
-            # =================================================
-            # CLOUDFLARE DETECTION
-            # =================================================
-
             if (
                 "Just a moment" in r.text
                 or "Checking your browser" in r.text
@@ -211,20 +203,12 @@ def _fetch(url):
 
                 continue
 
-            # =================================================
-            # SUCCESS
-            # =================================================
-
             if (
                 r.status_code == 200
                 and len(r.text) > 1000
             ):
 
                 return r.text
-
-            # =================================================
-            # ROTATE ON BLOCK
-            # =================================================
 
             if r.status_code in [403, 429]:
 
@@ -394,7 +378,7 @@ def get_player_match_ids(
     return final[:max_matches]
 
 # =========================================================
-# PARSE MATCH KILLS
+# NEW RESILIENT PARSER
 # =========================================================
 
 def _parse_match_kills(
@@ -414,7 +398,7 @@ def _parse_match_kills(
     except Exception as e:
 
         print(
-            f"BS4 ERROR: {e}"
+            f"SOUP ERROR: {e}"
         )
 
         return {
@@ -422,47 +406,25 @@ def _parse_match_kills(
         }
 
     # =====================================================
-    # FIND MAP CONTAINERS
+    # FIND ALL ROWS
     # =====================================================
 
-    map_containers = soup.find_all(
-
-        "div",
-
-        id=re.compile(
-            r"\d+-content"
-        )
-    )
+    rows = soup.find_all("tr")
 
     print(
-        f"MAP CONTAINERS: "
-        f"{len(map_containers)}"
+        f"TOTAL ROWS: "
+        f"{len(rows)}"
     )
 
-    if not map_containers:
-
-        return {
-            "maps": []
-        }
+    slug_lower = player_slug.lower()
 
     # =====================================================
-    # LOOP MAPS
+    # LOOP ROWS
     # =====================================================
 
-    for content in map_containers:
+    for tr in rows:
 
-        if len(maps_data) >= 2:
-            break
-
-        player_row = None
-
-        rows = content.find_all("tr")
-
-        print(
-            f"ROWS IN MAP: {len(rows)}"
-        )
-
-        for tr in rows:
+        try:
 
             row_text = tr.get_text(
                 " ",
@@ -471,132 +433,124 @@ def _parse_match_kills(
 
             row_lower = row_text.lower()
 
-            if (
-                player_slug.lower()
-                in row_lower
-            ):
+            # =================================================
+            # PLAYER MATCH
+            # =================================================
 
-                player_row = tr
+            if slug_lower not in row_lower:
+                continue
 
-                print(
-                    f"PLAYER ROW FOUND:"
-                )
+            print(
+                f"PLAYER ROW:"
+            )
 
-                print(row_text)
+            print(row_text)
 
-                break
+            # =================================================
+            # EXTRACT KILLS
+            # =================================================
 
-        if not player_row:
-            continue
+            kills = None
 
-        # =================================================
-        # EXTRACT KILLS + HS
-        # =================================================
+            kd_match = re.search(
+                r'(\d+)\s*-\s*\d+',
+                row_text
+            )
 
-        row_text = player_row.get_text(
-            " ",
-            strip=True
-        )
-
-        kd_match = re.search(
-            r'(\d+)\s*\((\d+)\)',
-            row_text
-        )
-
-        kills = None
-        hs = None
-
-        if kd_match:
-
-            try:
+            if kd_match:
 
                 kills = int(
                     kd_match.group(1)
                 )
 
-                hs = int(
-                    kd_match.group(2)
+            # =================================================
+            # FALLBACK KILLS
+            # =================================================
+
+            if kills is None:
+
+                nums = re.findall(
+                    r'\d+',
+                    row_text
                 )
 
-                print(
-                    f"KILLS={kills}"
-                )
+                nums = [
 
-                print(
-                    f"HS={hs}"
-                )
+                    int(x)
 
-            except:
-                pass
+                    for x in nums
 
-        # =================================================
-        # FALLBACK KILLS
-        # =================================================
+                    if 5 <= int(x) <= 45
 
-        if kills is None:
+                ]
 
-            nums = re.findall(
-                r'\d+',
+                if nums:
+
+                    kills = max(nums)
+
+            if kills is None:
+                continue
+
+            # =================================================
+            # HEADSHOTS
+            # =================================================
+
+            hs = 0
+
+            hs_match = re.search(
+                r'\((\d+)\)',
                 row_text
             )
 
-            possible = []
+            if hs_match:
 
-            for x in nums:
+                hs = int(
+                    hs_match.group(1)
+                )
+
+            # =================================================
+            # RATING
+            # =================================================
+
+            rating = 0
+
+            rating_matches = re.findall(
+                r'(\d\.\d{2})',
+                row_text
+            )
+
+            if rating_matches:
 
                 try:
 
-                    val = int(x)
-
-                    if 5 <= val <= 45:
-                        possible.append(val)
+                    rating = float(
+                        rating_matches[-1]
+                    )
 
                 except:
                     pass
 
-            if possible:
+            print(
+                f"K={kills} "
+                f"HS={hs} "
+                f"R={rating}"
+            )
 
-                kills = max(possible)
+            maps_data.append({
 
-                print(
-                    f"FALLBACK KILLS="
-                    f"{kills}"
-                )
+                "kills": kills,
 
-        if kills is None:
-            continue
+                "hs": hs,
 
-        # =================================================
-        # RATING
-        # =================================================
+                "rating": rating
 
-        rating = 0
+            })
 
-        rating_matches = re.findall(
-            r'(\d\.\d{2})',
-            row_text
-        )
+        except Exception as e:
 
-        if rating_matches:
-
-            try:
-
-                rating = float(
-                    rating_matches[-1]
-                )
-
-            except:
-                pass
-
-        maps_data.append({
-
-            "kills": kills,
-
-            "hs": hs if hs else 0,
-
-            "rating": rating
-
-        })
+            print(
+                f"ROW ERROR: {e}"
+            )
 
     print(
         f"TOTAL MAPS PARSED: "
@@ -604,7 +558,7 @@ def _parse_match_kills(
     )
 
     return {
-        "maps": maps_data
+        "maps": maps_data[:20]
     }
 
 # =========================================================
