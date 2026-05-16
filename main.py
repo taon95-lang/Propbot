@@ -23,7 +23,7 @@ async def scan(ctx, player=None, line=None, opponent="N/A"):
     async with ctx.typing():
         try:
             line_float = float(line)
-            # Safe threaded separation logic avoids Render and Gateway drops
+            # Execute background extraction in an isolated thread context to stay completely alive
             data = await asyncio.to_thread(get_player_info, player, line_float, opponent)
 
             if isinstance(data, str) and "FAIL" in data:
@@ -59,12 +59,12 @@ async def scan(ctx, player=None, line=None, opponent="N/A"):
             embed.add_field(name="💰 Recommendation", value=f"**{rec}**", inline=True)
             
             embed.add_field(name="📋 Recent Totals (Maps 1-2 Only)", value=f"`{data['Recent totals']}`", inline=False)
-            embed.set_footer(text="Gold Standard Prediction Engine • Minimum 100k Monte Carlo Runs")
+            embed.set_footer(text="Gold Standard Prediction Engine • Exact Mathematical Probability Matrix")
 
             await msg.edit(content=None, embed=embed)
 
         except ValueError:
-            await msg.edit(content="❌ The **line** parameter must match a numerical structure format (e.g. 32.5).")
+            await msg.edit(content="❌ The **line** parameter must match a numerical float layout structure (e.g. 32.5).")
         except Exception as e:
             print(f"SCAN ERROR: {e}")
             await msg.edit(content=f"❌ Scan execution crashed: {e}")
