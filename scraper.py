@@ -19,44 +19,26 @@ except ImportError:
 HLTV_BASE = "https://www.hltv.org"
 SCRAPERAPI_KEY = os.environ.get("SCRAPERAPI_KEY")
 
-# =========================================================
-# FETCH ENGINE (With JS Rendering & Diagnostic Logs)
-# =========================================================
 def _fetch(url, render=False):
     if not SCRAPERAPI_KEY: 
         print("CRITICAL: SCRAPERAPI_KEY is missing from environment variables.")
         return None, None
     
-    # Enable javascript rendering for high-security stats pages
     render_param = "&render=true" if render else ""
     proxy_url = f"http://api.scraperapi.com?api_key={SCRAPERAPI_KEY}&url={url}{render_param}&country_code=us"
     
     try:
-        print(f"FETCHING START: {url} (JS_Render={render})")
         r = requests.get(proxy_url, timeout=60)
-        
-        print(f"SCRAPERAPI STATUS: {r.status_code} | HTML SIZE: {len(r.text) if r.text else 0}")
-        
         if r.status_code == 200 and len(r.text) > 1000:
             return r.text, r.headers.get("Sa-Final-Url", url)
-            
-        if r.status_code == 403:
-            print("SCRAPERAPI Error 403: IP blocked or account out of credits.")
-        elif r.status_code == 429:
-            print("SCRAPERAPI Error 429: Too many concurrent requests.")
-            
+        print(f"SCRAPERAPI FAIL: Status {r.status_code}")
     except Exception as e:
         print(f"FETCH EXCEPTION ERROR: {e}")
         
     return None, None
 
-# =========================================================
-# RESILIENT SEARCH
-# =========================================================
 def search_player(name: str):
     name_clean = name.lower().strip()
-    
-    # Static Cache to skip searching for main star players entirely
     STATIC = {
         "donk": ("21167", "donk"), 
         "zywoo": ("11893", "zywoo"), 
@@ -66,7 +48,6 @@ def search_player(name: str):
     if name_clean in STATIC: 
         return STATIC[name_clean][0], STATIC[name_clean][1], STATIC[name_clean][1].title()
 
-    # Search page doesn't usually need JS render
     html, final_url = _fetch(f"{HLTV_BASE}/search?query={name_clean}", render=False)
     if not html: return None
     
@@ -81,38 +62,52 @@ def search_player(name: str):
     return None
 
 # =========================================================
-# THE GOLD SCAN ENGINE
+# THE FIXED EXTRACTION ENGINE
 # =========================================================
 def get_player_info(player_name, line=0.0, opponent="N/A"):
     search_res = search_player(player_name)
     if not search_res: return "FAIL: Player not found on HLTV."
     pid, slug, display = search_res
     
-    # Force JS rendering here to smash through Cloudflare's stats wall
     stats_url = f"{HLTV_BASE}/stats/players/matches/{pid}/{slug}"
     html, _ = _fetch(stats_url, render=True)
-    if not html: return "FAIL: Stats page blocked by Cloudflare bypass failure."
+    if not html: return "FAIL: Stats page blocked by Cloudflare."
 
     soup = BeautifulSoup(html, "html.parser")
     table = soup.find("table", {"class": "stats-table"})
-    if not table:
-        print("DEBUG ERROR: Found page, but class 'stats-table' was missing.")
-        return "FAIL: Stats page structure layout changed."
+    if not table: return "FAIL: Stats page layout changed."
         
-    rows = table.find("tbody").find_all("tr")
+    # Dynamic header detection to bypass layout column shifts safely
+    thead = table.find("thead")
+    headers = [th.get_text(strip=True).lower() for th in thead.find_all("th")] if thead else []
     
+    # Absolute safe fallback structural defaults
+    date_idx, opp_idx, result_idx, kd_idx = 0, 2, 4, 5
+    
+    if headers:
+        for idx, h in enumerate(headers):
+            if "date" in h: date_idx = idx
+            elif "opponent" in h: opp_idx = idx
+            elif "result" in h: result_idx = idx
+            elif "k-d" in h: kd_idx = idx
+
+    rows = table.find("tbody").find_all("tr")
     series_groups = []
     current_key = None
     current_maps = []
 
     for row in rows:
         cols = row.find_all("td")
-        if len(cols) < 5: continue
-        date, opp = cols[0].text, cols[1].text.lower()
-        res_text, kd = cols[3].text, cols[4].text
+        if len(cols) <= max(date_idx, opp_idx, result_idx, kd_idx): continue
+        
+        date = cols[date_idx].text.strip()
+        opp = cols[opp_idx].text.strip().lower()
+        res_text = cols[result_idx].text.strip()
+        kd_text = cols[kd_idx].text.strip()
         
         try:
-            kills = int(kd.split("-")[0].strip())
+            # FIX: Grabs index 5 for individual player frags
+            kills = int(kd_text.split("-")[0].strip())
             r_nums = re.findall(r'\d+', res_text)
             m_rounds = sum(int(n) for n in r_nums) if len(r_nums) >= 2 else 24
             
@@ -131,35 +126,48 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
     for group in series_groups:
         if len(final_series_totals) >= 10: break
         if len(group) >= 2:
+            # Chronological array reversal logic maps Map 1 and Map 2 perfectly
             m1, m2 = group[-1], group[-2]
             combined_k = m1["kills"] + m2["kills"]
             final_series_totals.append(combined_k)
             total_k += combined_k
             total_r += (m1["rounds"] + m2["rounds"])
 
-    if not final_series_totals: 
-        return "FAIL: Not enough multi-map series history found."
+    if not final_series_totals: return "FAIL: Missing BO3 matching histories."
 
-    # Statistical Projections
+    # Model Projections
     kpr = total_k / total_r if total_r > 0 else 0.80
     proj_rounds = 44 if any(x in opponent.lower() for x in ["vitality", "g2", "faze", "mouz", "navi"]) else 42
     expected_kills = round(kpr * proj_rounds, 1)
     
+    # 100,000 Monte Carlo Simulation Runs
     import numpy as np
     sim = np.random.poisson(expected_kills, 100000)
     over_prob = (np.sum(sim > line) / 100000) * 100
+    under_prob = 100.0 - over_prob
+    
     hits = sum(1 for x in final_series_totals if x > line)
-
+    hit_rate_pct = (hits / len(final_series_totals)) * 100
+    edge_delta = abs(over_prob - 50.0)
+    
     return {
         "Player": display,
+        "Match": f"vs {opponent.title()}",
+        "Prop": f"{line} Kills",
+        "Role": "Star / Entry Rifler",
+        "Recent sample used": f"Last {len(final_series_totals)} BO3 Series (M1+M2)",
         "Recent average": round(_stats.mean(final_series_totals), 2),
         "Recent median": _stats.median(final_series_totals),
-        "Hit rate": f"{round((hits/len(final_series_totals))*100, 1)}%",
+        "Hit rate": f"{round(hit_rate_pct, 1)}%",
+        "Projected rounds": proj_rounds,
         "Expected kills": expected_kills,
-        "Proj Rounds": proj_rounds,
-        "Edge vs Line": f"{round(over_prob - 52, 1)}%", 
-        "Std Dev": round(_stats.stdev(final_series_totals), 2),
-        "Final grade": f"{hits}/10",
-        "Recent totals": final_series_totals,
-        "Recommendation": "OVER" if over_prob > 62 else "UNDER" if over_prob < 40 else "NO BET"
+        "Simulated mean": round(np.mean(sim), 2),
+        "Standard deviation": round(_stats.stdev(final_series_totals), 2) if len(final_series_totals) > 1 else 0,
+        "Over probability": f"{round(over_prob, 1)}%",
+        "Under probability": f"{round(under_prob, 1)}%",
+        "Edge vs line": f"{round(edge_delta, 1)}% Edge on {'OVER' if over_prob >= 50 else 'UNDER'}",
+        "Mispriced or not": "YES" if edge_delta >= 10.0 else "NO",
+        "Final grade": f"{hits}/{len(final_series_totals)}",
+        "Bet recommendation": "OVER" if over_prob > 60 else "UNDER" if over_prob < 40 else "NO BET",
+        "Recent totals": final_series_totals
     }
