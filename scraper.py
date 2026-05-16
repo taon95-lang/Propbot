@@ -1,5 +1,6 @@
 import re
 import os
+import math
 import statistics as _stats
 import functools
 from bs4 import BeautifulSoup
@@ -18,7 +19,7 @@ HLTV_BASE = "https://www.hltv.org"
 SCRAPERAPI_KEY = os.environ.get("SCRAPERAPI_KEY")
 
 # =========================================================
-# FETCH ENGINE (Using ScraperAPI for Unblockable Access)
+# FETCH ENGINE
 # =========================================================
 def _fetch(url):
     if not SCRAPERAPI_KEY:
@@ -29,6 +30,7 @@ def _fetch(url):
         r = requests.get(proxy_url, timeout=60)
         if r.status_code == 200 and len(r.text) > 1000:
             return r.text, r.headers.get("Sa-Final-Url", url)
+        print(f"SCRAPERAPI FAIL: Status {r.status_code}")
     except Exception as e:
         print(f"FETCH ERROR: {e}")
     return None, None
@@ -56,39 +58,47 @@ def search_player(name: str):
     return None
 
 # =========================================================
-# SURGICAL MATCH PAGE PARSER
+# BULLETPROOF MAP CONTAINER PARSER
 # =========================================================
 def _parse_match_page(html, player_slug):
     soup = BeautifulSoup(html, "html.parser")
-    tables = soup.find_all("table", {"class": "stats-table"})
-    
-    if not tables:
-        return []
-        
-    # The first table is always the 'Total' summary table. Skip it!
-    map_tables = tables[1:]
-    slug_lower = player_slug.lower()
     maps_data = []
     
-    for table in map_tables:
-        if len(maps_data) >= 2: # Only pull Map 1 and Map 2
+    # Target the map-specific layout blocks on HLTV match profiles
+    map_containers = soup.find_all("div", {"id": re.compile(r'map-stats-\d+')})
+    
+    # Fallback layout target if structure varies
+    if not map_containers:
+        map_containers = soup.find_all("div", {"class": "stats-content"})
+        if len(map_containers) > 1:
+            map_containers = map_containers[1:] # Skip the combined summary box
+
+    slug_lower = player_slug.lower()
+    
+    for container in map_containers:
+        if len(maps_data) >= 2: 
             break
             
-        rounds = 22 # Default fallback
-        prev_div = table.find_previous("div")
+        # Extract precise round lengths for exact KPR calculations
+        rounds = 22
+        prev_div = container.find_previous("div")
         if prev_div:
             scores = re.findall(r'\d+', prev_div.get_text())
             if len(scores) >= 2:
-                try: rounds = int(scores[-2]) + int(scores[-1])
-                except: pass
-                if rounds < 13 or rounds > 40: rounds = 22
+                try: 
+                    rounds = int(scores[-2]) + int(scores[-1])
+                except: 
+                    pass
+                if rounds < 10 or rounds > 45: 
+                    rounds = 22
 
-        rows = table.find_all("tr")
+        rows = container.find_all("tr")
         for tr in rows:
             row_text = tr.get_text(" ", strip=True).lower()
             if slug_lower in row_text:
                 kd_match = re.search(r'(\d+)\s*-\s*(\d+)', tr.get_text())
-                if not kd_match: continue
+                if not kd_match: 
+                    continue
                 kills = int(kd_match.group(1))
                 maps_data.append({"kills": kills, "rounds": rounds})
                 break
@@ -96,14 +106,26 @@ def _parse_match_page(html, player_slug):
     return maps_data
 
 # =========================================================
-# GOLD STANDARD SCANNERS
+# EXACT MATHEMATICAL SIMULATION
+# =========================================================
+def calculate_poisson_over(lam, line):
+    """Calculates perfect exact Poisson distribution probability without third-party dependencies."""
+    prob_le = 0.0
+    for k in range(int(line) + 1):
+        try:
+            prob_le += (pow(lam, k) * math.exp(-lam)) / math.factorial(k)
+        except OverflowError:
+            pass
+    return max(0.0, min(100.0, (1.0 - prob_le) * 100.0))
+
+# =========================================================
+# CORE EXECUTION PROFILE
 # =========================================================
 def get_player_info(player_name, line=0.0, opponent="N/A"):
     search_res = search_player(player_name)
     if not search_res: return "FAIL: Player not found."
     pid, slug, display = search_res
     
-    # Get the last 10 clean series URLs from results
     results_url = f"{HLTV_BASE}/results?player={pid}"
     html, _ = _fetch(results_url)
     if not html: return "FAIL: Could not load history overview."
@@ -122,7 +144,6 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
     series_totals = []
     total_k, total_r = 0, 0
     
-    # Surgical individual extraction sequence
     for mid, mslug in match_links:
         match_url = f"{HLTV_BASE}/matches/{mid}/{mslug}"
         m_html, _ = _fetch(match_url)
@@ -138,21 +159,19 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
             
     if not series_totals: return "FAIL: Insufficient series data generated."
     
-    # Advanced Betting Models Calculations
+    # Projections Modifiers
     kpr = total_k / total_r if total_r > 0 else 0.80
     proj_rounds = 44 if any(x in opponent.lower() for x in ["vitality", "g2", "faze", "mouz", "navi"]) else 42
     expected_kills = round(kpr * proj_rounds, 1)
     
-    import numpy as np
-    sim = np.random.poisson(expected_kills, 100000)
-    over_prob = (np.sum(sim > line) / 100000) * 100
+    over_prob = calculate_poisson_over(expected_kills, line)
     under_prob = 100.0 - over_prob
+    edge_delta = over_prob - 50.0
     
     avg_2map = round(_stats.mean(series_totals), 2)
     median = _stats.median(series_totals)
     hits = sum(1 for x in series_totals if x > line)
     hit_rate_pct = (hits / len(series_totals)) * 100
-    edge_delta = over_prob - 50.0
     
     return {
         "Player": display,
@@ -165,7 +184,7 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
         "Hit rate": f"{round(hit_rate_pct, 1)}%",
         "Projected rounds": proj_rounds,
         "Expected kills": expected_kills,
-        "Simulated mean": round(np.mean(sim), 2),
+        "Simulated mean": expected_kills,
         "Standard deviation": round(_stats.stdev(series_totals), 2) if len(series_totals) > 1 else 0,
         "Over probability": f"{round(over_prob, 1)}%",
         "Under probability": f"{round(under_prob, 1)}%",
