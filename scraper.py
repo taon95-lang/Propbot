@@ -1,465 +1,199 @@
 import re
 import os
 import time
-import functools
 import statistics as _stats
-
+import functools
+import random
 from bs4 import BeautifulSoup
 
 # =========================================================
-# REALTIME PRINTS
+# REALTIME PRINTS FOR RENDER
 # =========================================================
-
 print = functools.partial(print, flush=True)
-
-# =========================================================
-# REQUESTS
-# =========================================================
 
 try:
     from curl_cffi import requests as requests
-except:
+except ImportError:
     import requests
 
-# =========================================================
-# SETTINGS
-# =========================================================
-
 HLTV_BASE = "https://www.hltv.org"
-
-SCRAPERAPI_KEY = os.environ.get(
-    "SCRAPERAPI_KEY"
-)
-
-FETCH_TIMEOUT = 40
+SCRAPERAPI_KEY = os.environ.get("SCRAPERAPI_KEY")
 
 # =========================================================
-# FETCH
+# RESILIENT PROGRESSIVE FETCH ENGINE
 # =========================================================
-
-def _fetch(url):
-
-    headers = {
-
-        "User-Agent": (
-            "Mozilla/5.0 "
-            "(Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 "
-            "(KHTML, like Gecko) "
-            "Chrome/120 Safari/537.36"
-        )
-    }
-
-    # =====================================================
-    # SCRAPERAPI
-    # =====================================================
-
-    if SCRAPERAPI_KEY:
-
+def _fetch(url, render=False):
+    if not SCRAPERAPI_KEY:
+        print("CRITICAL: SCRAPERAPI_KEY environment variable is missing.")
+        return None, None
+    
+    for attempt in range(3):
+        use_render = render if attempt == 0 else (not render if attempt == 1 else True)
+        render_param = "&render=true" if use_render else ""
+        proxy_url = f"http://api.scraperapi.com?api_key={SCRAPERAPI_KEY}&url={url}{render_param}&country_code=us"
+        
         try:
-
-            proxy_url = (
-                "http://api.scraperapi.com"
-                f"?api_key={SCRAPERAPI_KEY}"
-                f"&url={url}"
-                f"&render=true"
-                f"&country_code=us"
-            )
-
-            print(f"FETCHING: {url}")
-
-            r = requests.get(
-                proxy_url,
-                headers=headers,
-                timeout=FETCH_TIMEOUT
-            )
-
-            print(f"STATUS: {r.status_code}")
-
-            if (
-                r.status_code == 200
-                and len(r.text) > 1000
-            ):
-
-                return r.text
-
+            print(f"FETCH ATTEMPT {attempt + 1}/3: {url} (JS_Render={use_render})")
+            r = requests.get(proxy_url, timeout=60)
+            
+            if r.status_code == 200 and len(r.text) > 1000:
+                return r.text, r.headers.get("Sa-Final-Url", url)
+                
+            print(f"ATTEMPT {attempt + 1} FAILED: Status code {r.status_code}")
+            time.sleep(1.5)
         except Exception as e:
+            print(f"ATTEMPT {attempt + 1} EXCEPTION: {e}")
+            time.sleep(1.5)
+            
+    return None, None
 
-            print(f"FETCH ERROR: {e}")
+# =========================================================
+# THE ABSOLUTE PLAYER SEARCH OVERHAUL
+# =========================================================
+def search_player(name: str):
+    name_clean = name.lower().strip()
+    
+    # Fast-pass cache for major star-tier requests
+    STATIC = {
+        "donk": ("21167", "donk"), 
+        "zywoo": ("11893", "zywoo"), 
+        "m0nesy": ("19230", "m0nesy"), 
+        "niko": ("3741", "niko"),
+        "jl": ("19206", "jl"),
+        "jamyoung": ("19645", "jamyoung")
+    }
+    if name_clean in STATIC: 
+        return STATIC[name_clean][0], STATIC[name_clean][1], STATIC[name_clean][1].title()
 
-    # =====================================================
-    # DIRECT
-    # =====================================================
+    html, final_url = _fetch(f"{HLTV_BASE}/search?query={name_clean}", render=False)
+    if not html: return None
+    
+    # Context 1: Safe profile page redirect evaluation
+    if final_url and "/player/" in final_url:
+        m = re.search(r'/player/(\d+)/([^/]+)', final_url)
+        if m: return m.group(1), m.group(2), m.group(2).title()
 
-    try:
+    # Context 2: Structural parsing filter to catch clean anchor paths strictly
+    found_links = re.findall(r'href="/player/(\d+)/([^"/\s>]+)"', html)
+    
+    if not found_links:
+        # Fallback tracking if target uses a statistical mapping variant
+        found_links = re.findall(r'href="/stats/players/(\d+)/([^"/\s>]+)"', html)
 
-        r = requests.get(
-            url,
-            headers=headers,
-            timeout=20
-        )
+    if not found_links:
+        # Final raw scraping check if HTML wraps tags loosely inside query variables
+        found_links = re.findall(r'/player/(\d+)/([^"\'\s>?&)]+)', html)
 
-        if r.status_code == 200:
-            return r.text
-
-    except Exception as e:
-
-        print(f"DIRECT ERROR: {e}")
-
+    if found_links:
+        pid, slug = found_links[0]
+        # Extreme string normalization step strips trailing layout parameters safely
+        slug_clean = slug.split('"')[0].split("'")[0].split(')')[0].split('?')[0].split('&')[0].strip()
+        return pid, slug_clean, slug_clean.replace("-", " ").title()
+        
     return None
 
 # =========================================================
-# SEARCH PLAYER
+# THE PERFECT GOLD SCAN ENGINE
 # =========================================================
+def get_player_info(player_name, line=0.0, opponent="N/A"):
+    search_res = search_player(player_name)
+    if not search_res: return f"FAIL: Could not find player '{player_name}' on HLTV."
+    pid, slug, display = search_res
+    print(f"TARGET ACQUIRED: {display} (ID: {pid})")
+    
+    stats_url = f"{HLTV_BASE}/stats/players/matches/{pid}/{slug}"
+    html, _ = _fetch(stats_url, render=True)
+    if not html: return "FAIL: Stats page blocked by Cloudflare after 3 retries."
 
-def search_player(name):
+    soup = BeautifulSoup(html, "html.parser")
+    table = soup.find("table", {"class": "stats-table"})
+    if not table: return "FAIL: Stats table layout changed on HLTV."
 
-    key = name.lower().strip()
-
-    STATIC = {
-
-        "donk": (
-            "21167",
-            "donk",
-            "donk"
-        ),
-
-        "jl": (
-            "14108",
-            "jl",
-            "jL"
-        ),
-
-        "zywoo": (
-            "11893",
-            "zywoo",
-            "ZywOo"
-        ),
-
-        "m0nesy": (
-            "19230",
-            "m0nesy",
-            "m0NESY"
-        ),
-
-        "niko": (
-            "3741",
-            "niko",
-            "NiKo"
-        )
-    }
-
-    if key in STATIC:
-        return STATIC[key]
-
-    html = _fetch(
-        f"{HLTV_BASE}/search?query={name}"
-    )
-
-    if not html:
-        return None
-
-    matches = re.findall(
-        r'/player/(\d+)/([\w-]+)',
-        html
-    )
-
-    if not matches:
-        return None
-
-    pid, slug = matches[0]
-
-    return (
-        pid,
-        slug,
-        slug
-    )
-
-# =========================================================
-# REAL HLTV STATS PARSER
-# =========================================================
-
-def _extract_maps_from_stats_page(
-    html
-):
-
-    soup = BeautifulSoup(
-        html,
-        "html.parser"
-    )
-
-    rows = soup.find_all("tr")
-
-    print(f"TOTAL ROWS: {len(rows)}")
-
-    maps = []
+    rows = table.find("tbody").find_all("tr")
+    series_groups = []
+    current_key = None
+    current_maps = []
 
     for row in rows:
-
+        cols = row.find_all("td")
+        if len(cols) < 5: continue
+        
+        date = cols[0].text.strip()
+        opp = cols[2].text.strip().lower()
+        
+        hyphen_cells = []
+        for cell in cols:
+            txt = cell.get_text(strip=True)
+            if re.match(r'^\d+\s*-\s*\d+$', txt):
+                hyphen_cells.append(txt)
+                
+        if len(hyphen_cells) < 2: continue
+        res_text = hyphen_cells[0]
+        kd_text = hyphen_cells[1]
+        
         try:
-
-            txt = row.get_text(
-                " ",
-                strip=True
-            )
-
-            # =================================================
-            # FIND KD
-            # =================================================
-
-            kd = re.findall(
-                r'(\d+)\s*-\s*(\d+)',
-                txt
-            )
-
-            if not kd:
-                continue
-
-            # =================================================
-            # USE FIRST KD
-            # =================================================
-
-            kills = int(kd[0][0])
-
-            deaths = int(kd[0][1])
-
-            # realistic filter
-            if kills < 8 or kills > 45:
-                continue
-
-            # =================================================
-            # RATING
-            # =================================================
-
-            rating = 0
-
-            rating_match = re.findall(
-                r'(\d\.\d{2})',
-                txt
-            )
-
-            if rating_match:
-
-                try:
-
-                    rating = float(
-                        rating_match[-1]
-                    )
-
-                except:
-                    rating = 0
-
-            # =================================================
-            # HS
-            # =================================================
-
-            hs = 0
-
-            hs_match = re.findall(
-                r'\((\d+)\)',
-                txt
-            )
-
-            if hs_match:
-
-                try:
-
-                    hs = int(
-                        hs_match[0]
-                    )
-
-                except:
-                    hs = 0
-
-            maps.append({
-
-                "kills": kills,
-
-                "deaths": deaths,
-
-                "hs": hs,
-
-                "rating": rating
-
-            })
-
-            print(
-                f"MAP: "
-                f"K={kills} "
-                f"D={deaths} "
-                f"HS={hs} "
-                f"R={rating}"
-            )
-
-        except Exception as e:
-
-            print(f"ROW ERROR: {e}")
-
-    return maps[:10]
-
-# =========================================================
-# MAIN ENGINE
-# =========================================================
-
-def get_player_info(
-    player_name,
-    line=0,
-    opponent="N/A"
-):
-
-    result = search_player(
-        player_name
-    )
-
-    if not result:
-
-        return (
-            "FAIL: Player not found."
-        )
-
-    pid, slug, display = result
-
-    print(f"STARTING SCAN: {display}")
-
-    url = (
-        f"{HLTV_BASE}/stats/players/matches/"
-        f"{pid}/{slug}"
-    )
-
-    html = _fetch(url)
-
-    if not html:
-
-        return (
-            "FAIL: Could not "
-            "load HLTV stats page."
-        )
-
-    maps = _extract_maps_from_stats_page(
-        html
-    )
-
-    if not maps:
-
-        return (
-            "FAIL: No valid maps found."
-        )
-
-    # =====================================================
-    # STATS
-    # =====================================================
-
-    kills = [
-        x["kills"]
-        for x in maps
-    ]
-
-    hs = [
-        x["hs"]
-        for x in maps
-    ]
-
-    ratings = [
-        x["rating"]
-        for x in maps
-    ]
-
-    avg = round(
-        _stats.mean(kills),
-        2
-    )
-
-    avg_hs = round(
-        _stats.mean(hs),
-        2
-    )
-
-    avg_rating = round(
-        _stats.mean(ratings),
-        2
-    )
-
-    hits = len([
-
-        x for x in kills
-
-        if x > line
-
-    ])
-
-    hit_rate = round(
-
-        (
-            hits / len(kills)
-        ) * 100,
-
-        1
-
-    )
-
-    edge = round(
-        avg - line,
-        2
-    )
-
-    # =====================================================
-    # BET LOGIC
-    # =====================================================
-
-    if avg >= line + 2:
-
-        recommendation = "OVER"
-
-    elif avg <= line - 2:
-
-        recommendation = "UNDER"
-
-    else:
-
-        recommendation = "NO BET"
-
-    print(f"FINAL AVG: {avg}")
-
+            kills = int(kd_text.split("-")[0].strip())
+            r_nums = re.findall(r'\d+', res_text)
+            m_rounds = sum(int(n) for n in r_nums) if len(r_nums) >= 2 else 24
+            
+            key = f"{date}_{opp}"
+            if key != current_key:
+                if current_maps: series_groups.append(current_maps)
+                current_key, current_maps = key, []
+            current_maps.append({"kills": kills, "rounds": m_rounds})
+        except: continue
+        
+    if current_maps: series_groups.append(current_maps)
+
+    final_series_totals = []
+    total_k, total_r = 0, 0
+    
+    for group in series_groups:
+        if len(final_series_totals) >= 10: break
+        if len(group) >= 2:
+            m1, m2 = group[-1], group[-2]
+            combined_k = m1["kills"] + m2["kills"]
+            final_series_totals.append(combined_k)
+            total_k += combined_k
+            total_r += (m1["rounds"] + m2["rounds"])
+
+    if not final_series_totals: return "FAIL: Not enough valid multi-map series found."
+
+    # Statistical Projections Models
+    kpr = total_k / total_r if total_r > 0 else 0.80
+    proj_rounds = 44 if any(x in opponent.lower() for x in ["vitality", "g2", "faze", "mouz", "navi"]) else 42
+    expected_kills = round(kpr * proj_rounds, 1)
+    
+    # 100,000 Monte Carlo Simulations Runs
+    import numpy as np
+    sim = np.random.poisson(expected_kills, 100000)
+    over_prob = (np.sum(sim > line) / 100000) * 100
+    under_prob = 100.0 - over_prob
+    
+    avg_2map = round(_stats.mean(final_series_totals), 2)
+    median = _stats.median(final_series_totals)
+    hits = sum(1 for x in final_series_totals if x > line)
+    hit_rate_pct = (hits / len(final_series_totals)) * 100
+    edge_delta = over_prob - 50.0
+    
     return {
-
         "Player": display,
-
-        "Opponent": opponent,
-
-        "Line": line,
-
-        "Avg Kills": avg,
-
-        "Edge": edge,
-
-        "Hit Rate": f"{hit_rate}%",
-
-        "Avg HS": avg_hs,
-
-        "Avg Rating": avg_rating,
-
-        "Sample": len(kills),
-
-        "Bet recommendation": recommendation,
-
-        "Recent Maps": ", ".join(
-            str(x)
-            for x in kills
-        ),
-
-        "Recent totals": kills
+        "Match": f"vs {opponent.title()}",
+        "Prop": f"{line} Kills",
+        "Role": "Star / Entry Rifler",
+        "Recent sample used": f"Last {len(final_series_totals)} BO3 Series (M1+M2)",
+        "Recent average": avg_2map,
+        "Recent median": median,
+        "Hit rate": f"{round(hit_rate_pct, 1)}%",
+        "Projected rounds": proj_rounds,
+        "Expected kills": expected_kills,
+        "Simulated mean": round(np.mean(sim), 2),
+        "Standard deviation": round(_stats.stdev(final_series_totals), 2) if len(final_series_totals) > 1 else 0,
+        "Over probability": f"{round(over_prob, 1)}%",
+        "Under probability": f"{round(under_prob, 1)}%",
+        "Edge vs line": f"{round(edge_delta, 1)}%",
+        "Mispriced or not": "YES" if abs(edge_delta) >= 10.0 else "NO",
+        "Final grade": f"{hits}/{len(final_series_totals)}",
+        "Bet recommendation": "OVER" if over_prob > 60 else "UNDER" if over_prob < 40 else "NO BET",
+        "Recent totals": final_series_totals
     }
-
-# =========================================================
-# TEST
-# =========================================================
-
-if __name__ == "__main__":
-
-    print(
-        get_player_info(
-            "jl",
-            28.5,
-            "magic"
-        )
-    )
