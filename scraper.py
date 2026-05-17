@@ -53,7 +53,7 @@ def _fetch(url, render=False):
 def search_player(name: str):
     name_clean = name.lower().strip()
     
-    # Pre-seeded fast-cache for immediate star queries
+    # Fast-pass cache for major star-tier requests
     STATIC = {
         "donk": ("21167", "donk"), 
         "zywoo": ("11893", "zywoo"), 
@@ -87,7 +87,7 @@ def search_player(name: str):
     return None
 
 # =========================================================
-# THE PERFECT DATE-CLUSTERED SCAN ENGINE
+# THE PERFECT GOLD SCAN ENGINE
 # =========================================================
 def get_player_info(player_name, line=0.0, opponent="N/A"):
     search_res = search_player(player_name)
@@ -105,7 +105,7 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
 
     rows = table.find("tbody").find_all("tr")
     series_groups = []
-    current_date = None
+    current_key = None
     current_maps = []
 
     for row in rows:
@@ -113,12 +113,16 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
         if len(cols) < 5: continue
         
         date = cols[0].text.strip()
+        opp = cols[2].text.strip().lower()
         
-        # Pull layout strings matching standard mathematical dash structures
+        # Clean opponent name to keep grouping safe against score layout shifts
+        opp_clean = re.sub(r'[^a-zA-Z0-9]', '', opp)
+        
+        # FIX: Universal dash regex support safely catches standard hyphens, en-dashes, and em-dashes
         hyphen_cells = []
         for cell in cols:
             txt = cell.get_text(strip=True)
-            if re.match(r'^\d+\s*-\s*\d+$', txt):
+            if re.match(r'^\d+\s*[-\u2013\u2014]\s*\d+$', txt):
                 hyphen_cells.append(txt)
                 
         if len(hyphen_cells) < 2: continue
@@ -126,18 +130,18 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
         kd_text = hyphen_cells[1]
         
         try:
-            kills = int(kd_text.split("-")[0].strip())
-            r_nums = re.findall(r'\d+', res_text)
-            m_rounds = sum(int(n) for n in r_nums) if len(r_nums) >= 2 else 24
+            # FIX: Pull numbers using re.findall to avoid split errors on varying dash configurations
+            res_nums = re.findall(r'\d+', res_text)
+            kd_nums = re.findall(r'\d+', kd_text)
             
-            # GOLD STANDARD FIXED CLUSTERING: Group rows matching purely by sequential date
-            if current_date and date == current_date:
-                current_maps.append({"kills": kills, "rounds": m_rounds})
-            else:
-                if current_maps: 
-                    series_groups.append(current_maps)
-                current_date = date
-                current_maps = [{"kills": kills, "rounds": m_rounds}]
+            kills = int(kd_nums[0])
+            m_rounds = sum(int(n) for n in res_nums) if len(res_nums) >= 2 else 24
+            
+            key = f"{date}_{opp_clean}"
+            if key != current_key:
+                if current_maps: series_groups.append(current_maps)
+                current_key, current_maps = key, []
+            current_maps.append({"kills": kills, "rounds": m_rounds})
         except: continue
         
     if current_maps: series_groups.append(current_maps)
@@ -148,7 +152,6 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
     for group in series_groups:
         if len(final_series_totals) >= 10: break
         if len(group) >= 2:
-            # Reversal map isolation logic extracts Map 1 and Map 2 perfectly out of 3
             m1, m2 = group[-1], group[-2]
             combined_k = m1["kills"] + m2["kills"]
             final_series_totals.append(combined_k)
@@ -167,12 +170,12 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
     sim = np.random.poisson(expected_kills, 100000)
     over_prob = (np.sum(sim > line) / 100000) * 100
     under_prob = 100.0 - over_prob
+    edge_delta = over_prob - 50.0
     
     avg_2map = round(_stats.mean(final_series_totals), 2)
     median = _stats.median(final_series_totals)
     hits = sum(1 for x in final_series_totals if x > line)
     hit_rate_pct = (hits / len(final_series_totals)) * 100
-    edge_delta = over_prob - 50.0
     
     return {
         "Player": display,
