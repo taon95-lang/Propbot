@@ -6,6 +6,7 @@ import functools
 import random
 from bs4 import BeautifulSoup
 
+# Ensure real-time print updates populate Render service streams immediately
 print = functools.partial(print, flush=True)
 
 try:
@@ -115,14 +116,14 @@ def _parse_stats_table(soup):
         result_idx = next((i for i, h in enumerate(headers) if "result" in h or "map" in h), 5)
         kd_idx = next((i for i, h in enumerate(headers) if "k-d" in h or "k - d" in h), 6)
     else:
-        # Fallback to your original indices if no header found
+        # Fallback to original indices if no header found
         date_idx, opp_idx, result_idx, kd_idx = 0, 2, 5, 6
         print(f"NO HEADER FOUND - Using fallback indices: date={date_idx}, opp={opp_idx}, result={result_idx}, kd={kd_idx}")
     
     return table, date_idx, opp_idx, result_idx, kd_idx
 
 # =========================================================
-# THE PERFECT NO-GUESSWORK DIRECT INDEX ENGINE (FIXED)
+# THE PERFECT NO-GUESSWORK DIRECT INDEX ENGINE
 # =========================================================
 def get_player_info(player_name, line=0.0, opponent="N/A"):
     search_res = search_player(player_name)
@@ -146,64 +147,75 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
     table, date_idx, opp_idx, result_idx, kd_idx = parse_result
 
     rows = table.find("tbody").find_all("tr")
-    series_groups = []
-    current_key = None
-    current_maps = []
-
+    
     print(f"PROCESSING {len(rows)} ROWS FROM STATS TABLE...")
+
+    # Track all maps regardless of series grouping first
+    all_maps = []
 
     for row in rows:
         cols = row.find_all("td")
         if len(cols) <= max(date_idx, opp_idx, result_idx, kd_idx): 
             continue
         
-        date = cols[date_idx].text.strip()
-        opp = cols[opp_idx].text.strip().lower()
-        res_text = cols[result_idx].text.strip()
-        kd_text = cols[kd_idx].text.strip()
-        
-        opp_clean = re.sub(r'[^a-zA-Z0-9]', '', opp)
-        
         try:
+            date = cols[date_idx].text.strip()
+            opp = cols[opp_idx].text.strip().lower()
+            res_text = cols[result_idx].text.strip()
+            kd_text = cols[kd_idx].text.strip()
+            
             res_nums = re.findall(r'\d+', res_text)
             kd_nums = re.findall(r'\d+', kd_text)
             
-            if len(kd_nums) < 2 or len(res_nums) < 2: 
-                continue
-            
-            kills = int(kd_nums[0])
-            m_rounds = int(res_nums[0]) + int(res_nums[1])
-            
-            key = f"{date}_{opp_clean}"
-            if key != current_key:
-                if current_maps: 
-                    series_groups.append(current_maps)
-                current_key, current_maps = key, []
-            current_maps.append({"kills": kills, "rounds": m_rounds})
-        except Exception as e: 
-            print(f"ROW PARSE ERROR: {e} | Row data: {[c.text.strip() for c in cols]}")
+            if len(kd_nums) >= 2 and len(res_nums) >= 2:
+                kills = int(kd_nums[0])
+                m_rounds = int(res_nums[0]) + int(res_nums[1])
+                
+                all_maps.append({
+                    "date": date,
+                    "opponent": opp,
+                    "kills": kills,
+                    "rounds": m_rounds
+                })
+        except Exception as e:
             continue
+
+    print(f"TOTAL MAPS FOUND: {len(all_maps)}")
+
+    if len(all_maps) < 2:
+        return f"FAIL: Only found {len(all_maps)} maps. Player may not have recent match data on HLTV."
+
+    # Group maps into series by date AND opponent
+    series_groups = []
+    i = 0
+    while i < len(all_maps) - 1:
+        # Check if next map is same date/opponent (same series)
+        current = all_maps[i]
+        next_map = all_maps[i + 1]
         
-    if current_maps: 
-        series_groups.append(current_maps)
+        if current["date"] == next_map["date"] and current["opponent"] == next_map["opponent"]:
+            # This is a multi-map series
+            series_groups.append([current, next_map])
+            i += 2  # Skip both maps
+        else:
+            i += 1  # Single map, skip it
 
-    print(f"FOUND {len(series_groups)} TOTAL SERIES")
+    print(f"FOUND {len(series_groups)} MULTI-MAP SERIES")
 
+    # Now process the series
     final_series_totals = []
     total_k, total_r = 0, 0
-    
-    for group in series_groups:
-        if len(final_series_totals) >= 10: 
-            break
+
+    for group in series_groups[:10]:  # Take last 10 series
         if len(group) >= 2:
-            m1, m2 = group[-1], group[-2]
-            combined_k = m1["kills"] + m2["kills"]
+            combined_k = group[0]["kills"] + group[1]["kills"]
+            combined_r = group[0]["rounds"] + group[1]["rounds"]
             final_series_totals.append(combined_k)
             total_k += combined_k
-            total_r += (m1["rounds"] + m2["rounds"])
+            total_r += combined_r
 
-    if not final_series_totals: 
-        return "FAIL: Not enough valid multi-map series found. Player may not have recent BO3 data."
+    if not final_series_totals:
+        return f"FAIL: Found {len(all_maps)} maps but no multi-map series. Player may have only played BO1s recently."
 
     print(f"FINAL SAMPLE: {len(final_series_totals)} BO3 series (Maps 1-2 only)")
     print(f"RECENT TOTALS: {final_series_totals}")
