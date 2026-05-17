@@ -8,13 +8,10 @@ import random
 from bs4 import BeautifulSoup
 
 # =========================================================
-# REALTIME PRINTS FOR RENDER
+# REALTIME PRINTS
 # =========================================================
 
-print = functools.partial(
-    print,
-    flush=True
-)
+print = functools.partial(print, flush=True)
 
 # =========================================================
 # REQUESTS
@@ -29,103 +26,41 @@ except ImportError:
 # SETTINGS
 # =========================================================
 
-PARSER = "html.parser"
-
 HLTV_BASE = "https://www.hltv.org"
 
 SCRAPERAPI_KEY = os.environ.get(
     "SCRAPERAPI_KEY"
 )
 
+FETCH_TIMEOUT = 30
+
 # =========================================================
-# FETCH ENGINE
+# FETCH
 # =========================================================
 
-def _fetch(
-    url,
-    render=False
-):
+def _fetch(url):
 
-    headers = {
-
-        "User-Agent": random.choice([
-
-            (
-                "Mozilla/5.0 "
-                "(Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 "
-                "(KHTML, like Gecko) "
-                "Chrome/123.0.0.0 "
-                "Safari/537.36"
-            ),
-
-            (
-                "Mozilla/5.0 "
-                "(Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 "
-                "(KHTML, like Gecko) "
-                "Chrome/122.0.0.0 "
-                "Safari/537.36"
-            )
-
-        ]),
-
-        "Accept": (
-            "text/html,"
-            "application/xhtml+xml,"
-            "application/xml;q=0.9,"
-            "image/avif,image/webp,*/*;q=0.8"
-        ),
-
-        "Accept-Language": "en-US,en;q=0.9",
-
-        "Referer": HLTV_BASE,
-
-        "Cache-Control": "no-cache"
-    }
+    print(f"FETCHING: {url}")
 
     # =====================================================
-    # SCRAPERAPI FETCH
+    # SCRAPERAPI FIRST
     # =====================================================
 
     if SCRAPERAPI_KEY:
 
         try:
 
-            render_param = (
-                "&render=true"
-                if render
-                else ""
-            )
-
             proxy_url = (
-
                 "http://api.scraperapi.com"
-
                 f"?api_key={SCRAPERAPI_KEY}"
-
-                f"&keep_headers=true"
-
-                f"&country_code=us"
-
-                f"{render_param}"
-
                 f"&url={url}"
-
-            )
-
-            print(
-                f"FETCHING: {url}"
+                "&render=true"
+                "&country_code=us"
             )
 
             r = requests.get(
-
                 proxy_url,
-
-                headers=headers,
-
-                timeout=90
-
+                timeout=60
             )
 
             print(
@@ -133,15 +68,8 @@ def _fetch(
             )
 
             if (
-
                 r.status_code == 200
-
-                and len(r.text) > 5000
-
-                and "Just a moment" not in r.text
-
-                and "Cloudflare" not in r.text
-
+                and len(r.text) > 1000
             ):
 
                 return r.text
@@ -149,31 +77,41 @@ def _fetch(
         except Exception as e:
 
             print(
-                f"FETCH ERROR: {e}"
+                f"SCRAPERAPI ERROR: {e}"
             )
 
     # =====================================================
-    # DIRECT FETCH FALLBACK
+    # DIRECT FALLBACK
     # =====================================================
 
     try:
 
+        headers = {
+
+            "User-Agent": (
+                "Mozilla/5.0 "
+                "(Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 "
+                "(KHTML, like Gecko) "
+                "Chrome/120.0.0.0 "
+                "Safari/537.36"
+            )
+
+        }
+
         r = requests.get(
-
             url,
-
             headers=headers,
+            timeout=FETCH_TIMEOUT
+        )
 
-            timeout=30
-
+        print(
+            f"DIRECT STATUS: {r.status_code}"
         )
 
         if (
-
             r.status_code == 200
-
-            and len(r.text) > 5000
-
+            and len(r.text) > 1000
         ):
 
             return r.text
@@ -190,9 +128,7 @@ def _fetch(
 # SEARCH PLAYER
 # =========================================================
 
-def search_player(
-    name: str
-):
+def search_player(name: str):
 
     if not name:
         return None
@@ -203,68 +139,62 @@ def search_player(
 
         "donk": (
             "21167",
+            "donk",
             "donk"
         ),
 
         "zywoo": (
             "11893",
-            "zywoo"
+            "zywoo",
+            "ZywOo"
         ),
 
         "m0nesy": (
             "19230",
-            "m0nesy"
+            "m0nesy",
+            "m0NESY"
         ),
 
         "niko": (
             "3741",
-            "niko"
+            "niko",
+            "NiKo"
         ),
 
         "jl": (
             "14108",
-            "jl"
+            "jl",
+            "jL"
         ),
 
         "sh1ro": (
             "16920",
+            "sh1ro",
             "sh1ro"
         )
     }
 
     if key in STATIC:
 
-        pid, slug = STATIC[key]
+        return STATIC[key]
 
-        return (
-            pid,
-            slug,
-            slug.upper()
-        )
-
-    html = _fetch(
-
-        f"{HLTV_BASE}/search?query={key}"
-
+    url = (
+        f"{HLTV_BASE}/search"
+        f"?query={name}"
     )
 
-    if not html:
+    html = _fetch(url)
 
-        print("SEARCH FAILED")
+    if not html:
 
         return None
 
     matches = re.findall(
-
         r'/player/(\d+)/([\w-]+)',
-
         html
-
     )
 
     if not matches:
-
-        print("NO PLAYER FOUND")
 
         return None
 
@@ -284,112 +214,7 @@ def search_player(
     )
 
 # =========================================================
-# PARSE STATS PAGE
-# =========================================================
-
-def _extract_series_data(
-    soup
-):
-
-    rows = soup.find_all("tr")
-
-    print(
-        f"TOTAL ROWS: {len(rows)}"
-    )
-
-    all_maps = []
-
-    for row in rows:
-
-        try:
-
-            text = row.get_text(
-                " ",
-                strip=True
-            )
-
-            kd_match = re.search(
-
-                r'(\d+)\s*-\s*(\d+)',
-
-                text
-
-            )
-
-            if not kd_match:
-                continue
-
-            kills = int(
-                kd_match.group(1)
-            )
-
-            if kills < 5 or kills > 45:
-                continue
-
-            hs = 0
-
-            hs_match = re.search(
-
-                r'\((\d+)\)',
-
-                text
-
-            )
-
-            if hs_match:
-
-                try:
-
-                    hs = int(
-                        hs_match.group(1)
-                    )
-
-                except:
-                    pass
-
-            rating = 0
-
-            rating_match = re.findall(
-
-                r'(\d\.\d{2})',
-
-                text
-
-            )
-
-            if rating_match:
-
-                try:
-
-                    rating = float(
-                        rating_match[-1]
-                    )
-
-                except:
-                    pass
-
-            all_maps.append({
-
-                "kills": kills,
-
-                "hs": hs,
-
-                "rating": rating
-
-            })
-
-        except:
-            pass
-
-    print(
-        f"MAPS EXTRACTED: "
-        f"{len(all_maps)}"
-    )
-
-    return all_maps
-
-# =========================================================
-# MAIN ENGINE
+# GET PLAYER INFO
 # =========================================================
 
 def get_player_info(
@@ -404,10 +229,7 @@ def get_player_info(
 
     if not result:
 
-        return (
-            "FAIL: Player "
-            "not found."
-        )
+        return None
 
     pid, slug, display = result
 
@@ -416,58 +238,146 @@ def get_player_info(
         f"{display}"
     )
 
-    stats_url = (
+    # =====================================================
+    # HLTV STATS PAGE
+    # =====================================================
 
-        f"{HLTV_BASE}"
-
-        f"/stats/players/matches/"
-
+    url = (
+        f"{HLTV_BASE}/stats/players/matches/"
         f"{pid}/{slug}"
-
     )
 
-    html = _fetch(
-        stats_url,
-        render=True
-    )
+    html = _fetch(url)
 
     if not html:
 
-        return (
-            "FAIL: Stats page "
-            "blocked by Cloudflare."
-        )
+        return None
 
-    try:
+    # =====================================================
+    # PARSE
+    # =====================================================
 
-        soup = BeautifulSoup(
-            html,
-            PARSER
-        )
-
-    except Exception as e:
-
-        print(
-            f"SOUP ERROR: {e}"
-        )
-
-        return (
-            "FAIL: BeautifulSoup "
-            "parser crashed."
-        )
-
-    maps = _extract_series_data(
-        soup
+    soup = BeautifulSoup(
+        html,
+        "html.parser"
     )
+
+    rows = soup.find_all("tr")
+
+    print(
+        f"TOTAL ROWS: {len(rows)}"
+    )
+
+    maps = []
+
+    # =====================================================
+    # EXTRACT MAPS
+    # =====================================================
+
+    for tr in rows:
+
+        txt = tr.get_text(
+            " ",
+            strip=True
+        )
+
+        # =================================================
+        # FIND KD
+        # =================================================
+
+        kd_match = re.search(
+            r'(\d+)\s*-\s*(\d+)',
+            txt
+        )
+
+        if not kd_match:
+            continue
+
+        try:
+
+            kills = int(
+                kd_match.group(1)
+            )
+
+        except:
+            continue
+
+        # =================================================
+        # HEADSHOTS
+        # =================================================
+
+        hs = 0
+
+        hs_match = re.search(
+            r'\((\d+)\)',
+            txt
+        )
+
+        if hs_match:
+
+            try:
+
+                hs = int(
+                    hs_match.group(1)
+                )
+
+            except:
+                pass
+
+        # =================================================
+        # RATING
+        # =================================================
+
+        rating = 0
+
+        rating_match = re.findall(
+            r'(\d\.\d{2})',
+            txt
+        )
+
+        if rating_match:
+
+            try:
+
+                rating = float(
+                    rating_match[-1]
+                )
+
+            except:
+                pass
+
+        maps.append({
+
+            "kills": kills,
+
+            "hs": hs,
+
+            "rating": rating
+
+        })
+
+        # =================================================
+        # LIMIT SAMPLE
+        # =================================================
+
+        if len(maps) >= 20:
+            break
+
+    print(
+        f"MAPS EXTRACTED: {len(maps)}"
+    )
+
+    # =====================================================
+    # NO DATA
+    # =====================================================
 
     if not maps:
 
-        return (
-            "FAIL: No valid "
-            "map stats found."
-        )
+        return None
 
-    maps = maps[:20]
+    # =====================================================
+    # BUILD STATS
+    # =====================================================
 
     kills = [
         m["kills"]
@@ -499,27 +409,54 @@ def get_player_info(
         2
     )
 
-    hit_rate = 0
+    line_float = float(line)
 
-    if line:
+    hits = len([
 
-        hit_rate = round(
+        k for k in kills
 
-            (
-                sum(
-                    1
-                    for x in kills
-                    if x > float(line)
-                )
-                / len(kills)
-            ) * 100,
+        if k > line_float
 
-            1
-        )
+    ])
+
+    hit_rate = round(
+
+        (
+            hits / len(kills)
+        ) * 100,
+
+        1
+
+    ) if kills else 0
+
+    edge = round(
+        avg - line_float,
+        2
+    )
+
+    # =====================================================
+    # BET LOGIC
+    # =====================================================
+
+    if hit_rate >= 60:
+
+        bet = "OVER"
+
+    elif hit_rate <= 40:
+
+        bet = "UNDER"
+
+    else:
+
+        bet = "NO BET"
 
     print(
         f"FINAL AVG: {avg}"
     )
+
+    # =====================================================
+    # FINAL RETURN
+    # =====================================================
 
     return {
 
@@ -535,7 +472,13 @@ def get_player_info(
 
         "maps": maps,
 
-        "hit_rate": hit_rate
+        "hit_rate": hit_rate,
+
+        "edge": edge,
+
+        "Bet recommendation": bet,
+
+        "Recent totals": kills
 
     }
 
@@ -546,9 +489,9 @@ def get_player_info(
 if __name__ == "__main__":
 
     data = get_player_info(
-        "donk",
-        32.5,
-        "vitality"
+        "jl",
+        28.5,
+        "magic"
     )
 
     print(data)
