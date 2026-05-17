@@ -26,7 +26,6 @@ def _fetch(url, render=False):
         return None, None
     
     for attempt in range(3):
-        # Expanded explicit fallback checks to guarantee clean syntax processing
         if attempt == 0:
             use_render = render
         elif attempt == 1:
@@ -97,7 +96,7 @@ def search_player(name: str):
     return None
 
 # =========================================================
-# THE PERFECT OVERTIME-PROOF SCAN ENGINE
+# THE PERFECT NO-GUESSWORK DIRECT INDEX ENGINE
 # =========================================================
 def get_player_info(player_name, line=0.0, opponent="N/A"):
     search_res = search_player(player_name)
@@ -116,6 +115,7 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
     if not table: 
         return "FAIL: Stats table layout changed on HLTV."
 
+    # Explicit hardcoded index alignment matching the table's absolute structure layout
     date_idx, opp_idx, result_idx, kd_idx = 0, 2, 5, 6
 
     rows = table.find("tbody").find_all("tr")
@@ -136,6 +136,7 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
         opp_clean = re.sub(r'[^a-zA-Z0-9]', '', opp)
         
         try:
+            # Direct index number isolation completely bypasses custom column dash text variations
             res_nums = re.findall(r'\d+', res_text)
             kd_nums = re.findall(r'\d+', kd_text)
             
