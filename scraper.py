@@ -1,7 +1,6 @@
 import re
 import os
 import time
-import random
 import functools
 import statistics as _stats
 
@@ -19,18 +18,8 @@ print = functools.partial(print, flush=True)
 
 try:
     from curl_cffi import requests as requests
-except ImportError:
-    import requests
-
-# =========================================================
-# PARSER
-# =========================================================
-
-try:
-    import lxml
-    PARSER = "lxml"
 except:
-    PARSER = "html.parser"
+    import requests
 
 # =========================================================
 # SETTINGS
@@ -45,7 +34,7 @@ SCRAPERAPI_KEY = os.environ.get(
 FETCH_TIMEOUT = 40
 
 # =========================================================
-# FETCH ENGINE
+# FETCH
 # =========================================================
 
 def _fetch(url):
@@ -57,11 +46,8 @@ def _fetch(url):
             "(Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 "
             "(KHTML, like Gecko) "
-            "Chrome/120.0.0.0 "
-            "Safari/537.36"
-        ),
-
-        "Referer": HLTV_BASE
+            "Chrome/120 Safari/537.36"
+        )
     }
 
     # =====================================================
@@ -102,7 +88,7 @@ def _fetch(url):
             print(f"FETCH ERROR: {e}")
 
     # =====================================================
-    # DIRECT FALLBACK
+    # DIRECT
     # =====================================================
 
     try:
@@ -118,18 +104,15 @@ def _fetch(url):
 
     except Exception as e:
 
-        print(f"DIRECT FETCH ERROR: {e}")
+        print(f"DIRECT ERROR: {e}")
 
     return None
 
 # =========================================================
-# PLAYER SEARCH
+# SEARCH PLAYER
 # =========================================================
 
-def search_player(name: str):
-
-    if not name:
-        return None
+def search_player(name):
 
     key = name.lower().strip()
 
@@ -139,6 +122,12 @@ def search_player(name: str):
             "21167",
             "donk",
             "donk"
+        ),
+
+        "jl": (
+            "14108",
+            "jl",
+            "jL"
         ),
 
         "zywoo": (
@@ -153,41 +142,21 @@ def search_player(name: str):
             "m0NESY"
         ),
 
-        "jl": (
-            "14108",
-            "jl",
-            "jL"
-        ),
-
         "niko": (
             "3741",
             "niko",
             "NiKo"
-        ),
-
-        "sh1ro": (
-            "16920",
-            "sh1ro",
-            "sh1ro"
         )
     }
 
     if key in STATIC:
+        return STATIC[key]
 
-        pid, slug, display = STATIC[key]
-
-        return pid, slug, display
-
-    search_url = (
+    html = _fetch(
         f"{HLTV_BASE}/search?query={name}"
     )
 
-    html = _fetch(search_url)
-
     if not html:
-
-        print("SEARCH FAILED")
-
         return None
 
     matches = re.findall(
@@ -196,9 +165,6 @@ def search_player(name: str):
     )
 
     if not matches:
-
-        print("NO PLAYER FOUND")
-
         return None
 
     pid, slug = matches[0]
@@ -206,124 +172,60 @@ def search_player(name: str):
     return (
         pid,
         slug,
-        slug.replace("-", " ").title()
+        slug
     )
 
 # =========================================================
-# PARSE MATCH KILLS
+# REAL HLTV STATS PARSER
 # =========================================================
 
-def _parse_match_kills(
-    html,
-    player_slug
+def _extract_maps_from_stats_page(
+    html
 ):
 
-    maps_data = []
-
-    try:
-
-        soup = BeautifulSoup(
-            html,
-            PARSER
-        )
-
-    except Exception as e:
-
-        print(f"BS4 ERROR: {e}")
-
-        return {
-            "maps": []
-        }
-
-    # =====================================================
-    # FIND ALL ROWS
-    # =====================================================
+    soup = BeautifulSoup(
+        html,
+        "html.parser"
+    )
 
     rows = soup.find_all("tr")
 
     print(f"TOTAL ROWS: {len(rows)}")
 
-    slug_lower = player_slug.lower()
+    maps = []
 
-    for tr in rows:
+    for row in rows:
 
         try:
 
-            row_text = tr.get_text(
+            txt = row.get_text(
                 " ",
                 strip=True
             )
 
-            row_lower = row_text.lower()
-
             # =================================================
-            # PLAYER CHECK
+            # FIND KD
             # =================================================
 
-            if slug_lower not in row_lower:
-                continue
-
-            print("PLAYER ROW FOUND:")
-            print(row_text)
-
-            # =================================================
-            # FIND ALL KD PAIRS
-            # =================================================
-
-            kd_matches = re.findall(
+            kd = re.findall(
                 r'(\d+)\s*-\s*(\d+)',
-                row_text
+                txt
             )
 
-            if not kd_matches:
-
-                print("NO KD FOUND")
-
+            if not kd:
                 continue
 
-            kills = None
+            # =================================================
+            # USE FIRST KD
+            # =================================================
 
-            for kd in kd_matches:
+            kills = int(kd[0][0])
 
-                k = int(kd[0])
-                d = int(kd[1])
+            deaths = int(kd[0][1])
 
-                # realistic player kill filter
-                if 8 <= k <= 45:
-
-                    kills = k
-
-                    break
-
-            if kills is None:
-
-                print("NO VALID KILLS")
-
+            # realistic filter
+            if kills < 8 or kills > 45:
                 continue
-
-            print(f"KILLS: {kills}")
-
-            # =================================================
-            # HEADSHOTS
-            # =================================================
-
-            hs = 0
-
-            hs_matches = re.findall(
-                r'\((\d+)\)',
-                row_text
-            )
-
-            if hs_matches:
-
-                try:
-
-                    hs = int(
-                        hs_matches[0]
-                    )
-
-                except:
-                    hs = 0
 
             # =================================================
             # RATING
@@ -331,25 +233,49 @@ def _parse_match_kills(
 
             rating = 0
 
-            rating_matches = re.findall(
+            rating_match = re.findall(
                 r'(\d\.\d{2})',
-                row_text
+                txt
             )
 
-            if rating_matches:
+            if rating_match:
 
                 try:
 
                     rating = float(
-                        rating_matches[-1]
+                        rating_match[-1]
                     )
 
                 except:
                     rating = 0
 
-            maps_data.append({
+            # =================================================
+            # HS
+            # =================================================
+
+            hs = 0
+
+            hs_match = re.findall(
+                r'\((\d+)\)',
+                txt
+            )
+
+            if hs_match:
+
+                try:
+
+                    hs = int(
+                        hs_match[0]
+                    )
+
+                except:
+                    hs = 0
+
+            maps.append({
 
                 "kills": kills,
+
+                "deaths": deaths,
 
                 "hs": hs,
 
@@ -358,36 +284,26 @@ def _parse_match_kills(
             })
 
             print(
-                f"MAP SAVED -> "
-                f"K:{kills} "
-                f"HS:{hs} "
-                f"R:{rating}"
+                f"MAP: "
+                f"K={kills} "
+                f"D={deaths} "
+                f"HS={hs} "
+                f"R={rating}"
             )
 
         except Exception as e:
 
-            print(
-                f"ROW ERROR: {e}"
-            )
+            print(f"ROW ERROR: {e}")
 
-    print(
-        f"FINAL MAP COUNT: "
-        f"{len(maps_data)}"
-    )
-
-    return {
-
-        "maps": maps_data[:20]
-
-    }
+    return maps[:10]
 
 # =========================================================
-# MAIN SCAN ENGINE
+# MAIN ENGINE
 # =========================================================
 
 def get_player_info(
     player_name,
-    line=0.0,
+    line=0,
     opponent="N/A"
 ):
 
@@ -397,34 +313,30 @@ def get_player_info(
 
     if not result:
 
-        return "FAIL: Player not found."
+        return (
+            "FAIL: Player not found."
+        )
 
     pid, slug, display = result
 
     print(f"STARTING SCAN: {display}")
 
-    stats_url = (
+    url = (
         f"{HLTV_BASE}/stats/players/matches/"
         f"{pid}/{slug}"
     )
 
-    html = _fetch(stats_url)
+    html = _fetch(url)
 
     if not html:
 
         return (
-            "FAIL: Stats page "
-            "blocked by Cloudflare."
+            "FAIL: Could not "
+            "load HLTV stats page."
         )
 
-    parsed = _parse_match_kills(
-        html,
-        slug
-    )
-
-    maps = parsed.get(
-        "maps",
-        []
+    maps = _extract_maps_from_stats_page(
+        html
     )
 
     if not maps:
@@ -434,24 +346,22 @@ def get_player_info(
         )
 
     # =====================================================
-    # LAST 10 MAPS
+    # STATS
     # =====================================================
 
-    maps = maps[:10]
-
     kills = [
-        m["kills"]
-        for m in maps
+        x["kills"]
+        for x in maps
     ]
 
-    hs_list = [
-        m["hs"]
-        for m in maps
+    hs = [
+        x["hs"]
+        for x in maps
     ]
 
     ratings = [
-        m["rating"]
-        for m in maps
+        x["rating"]
+        for x in maps
     ]
 
     avg = round(
@@ -460,7 +370,7 @@ def get_player_info(
     )
 
     avg_hs = round(
-        _stats.mean(hs_list),
+        _stats.mean(hs),
         2
     )
 
@@ -510,10 +420,6 @@ def get_player_info(
 
     print(f"FINAL AVG: {avg}")
 
-    # =====================================================
-    # RETURN
-    # =====================================================
-
     return {
 
         "Player": display,
@@ -550,10 +456,10 @@ def get_player_info(
 
 if __name__ == "__main__":
 
-    data = get_player_info(
-        "jl",
-        28.5,
-        "magic"
+    print(
+        get_player_info(
+            "jl",
+            28.5,
+            "magic"
+        )
     )
-
-    print(data)
