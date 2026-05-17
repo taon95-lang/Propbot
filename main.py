@@ -29,7 +29,14 @@ async def scan(ctx, player=None, line=None, opponent="N/A"):
                 return await msg.edit(content=f"❌ {data}")
 
             rec = data['Bet recommendation']
-            color = 0x00ff00 if "OVER" in rec else 0xff0000 if "UNDER" in rec else 0x808080
+            
+            # Explicit statement assignment prevents structural syntax parsing drops
+            if "OVER" in rec:
+                color = 0x00ff00
+            elif "UNDER" in rec:
+                color = 0xff0000
+            else:
+                color = 0x808080
             
             embed = discord.Embed(title=f"🎯 {data['Player'].upper()} GOLD SCAN", color=color)
             
@@ -60,7 +67,7 @@ async def scan(ctx, player=None, line=None, opponent="N/A"):
             embed.add_field(name="📋 Recent Totals (Maps 1-2 Only)", value=f"`{data['Recent totals']}`", inline=False)
             embed.set_footer(text="Gold Standard Prediction Engine • 100,000 Monte Carlo Simulation Runs")
 
-            await gf msg.edit(content=None, embed=embed)
+            await msg.edit(content=None, embed=embed)
 
         except ValueError:
             await msg.edit(content="❌ The **line** parameter must match a valid decimal format (e.g. 32.5).")
