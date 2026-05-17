@@ -53,7 +53,7 @@ def _fetch(url, render=False):
 def search_player(name: str):
     name_clean = name.lower().strip()
     
-    # Fast-pass cache for major star-tier requests
+    # Pre-seeded fast-cache for immediate queries
     STATIC = {
         "donk": ("21167", "donk"), 
         "zywoo": ("11893", "zywoo"), 
@@ -87,7 +87,7 @@ def search_player(name: str):
     return None
 
 # =========================================================
-# THE PERFECT GOLD SCAN ENGINE
+# THE PERFECT DATE-CLUSTERED SCAN ENGINE
 # =========================================================
 def get_player_info(player_name, line=0.0, opponent="N/A"):
     search_res = search_player(player_name)
@@ -103,6 +103,9 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
     table = soup.find("table", {"class": "stats-table"})
     if not table: return "FAIL: Stats table layout changed on HLTV."
 
+    # Absolute safe indices for HLTV Stats History layout format
+    date_idx, opp_idx, result_idx, kd_idx = 0, 2, 5, 6
+
     rows = table.find("tbody").find_all("tr")
     series_groups = []
     current_key = None
@@ -110,32 +113,24 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
 
     for row in rows:
         cols = row.find_all("td")
-        if len(cols) < 5: continue
+        if len(cols) <= max(date_idx, opp_idx, result_idx, kd_idx): continue
         
-        date = cols[0].text.strip()
-        opp = cols[2].text.strip().lower()
+        date = cols[date_idx].text.strip()
+        opp = cols[opp_idx].text.strip().lower()
+        res_text = cols[result_idx].text.strip()
+        kd_text = cols[kd_idx].text.strip()
         
-        # Clean opponent name to keep grouping safe against score layout shifts
         opp_clean = re.sub(r'[^a-zA-Z0-9]', '', opp)
         
-        # FIX: Universal dash regex support safely catches standard hyphens, en-dashes, and em-dashes
-        hyphen_cells = []
-        for cell in cols:
-            txt = cell.get_text(strip=True)
-            if re.match(r'^\d+\s*[-\u2013\u2014]\s*\d+$', txt):
-                hyphen_cells.append(txt)
-                
-        if len(hyphen_cells) < 2: continue
-        res_text = hyphen_cells[0]
-        kd_text = hyphen_cells[1]
-        
         try:
-            # FIX: Pull numbers using re.findall to avoid split errors on varying dash configurations
+            # Captures standard and overtime digit structures safely
             res_nums = re.findall(r'\d+', res_text)
             kd_nums = re.findall(r'\d+', kd_text)
             
+            if len(kd_nums) < 2 or len(res_nums) < 2: continue
+            
             kills = int(kd_nums[0])
-            m_rounds = sum(int(n) for n in res_nums) if len(res_nums) >= 2 else 24
+            m_rounds = int(res_nums[0]) + int(res_nums[1])
             
             key = f"{date}_{opp_clean}"
             if key != current_key:
@@ -152,6 +147,7 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
     for group in series_groups:
         if len(final_series_totals) >= 10: break
         if len(group) >= 2:
+            # Grabs Map 1 and Map 2 from newest to oldest stack order
             m1, m2 = group[-1], group[-2]
             combined_k = m1["kills"] + m2["kills"]
             final_series_totals.append(combined_k)
