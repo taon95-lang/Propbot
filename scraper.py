@@ -6,9 +6,7 @@ import functools
 import random
 from bs4 import BeautifulSoup
 
-# =========================================================
-# REALTIME PRINTS FOR RENDER
-# =========================================================
+# Ensure real-time print updates populate Render service streams immediately
 print = functools.partial(print, flush=True)
 
 try:
@@ -28,8 +26,19 @@ def _fetch(url, render=False):
         return None, None
     
     for attempt in range(3):
-        use_render = render if attempt == 0 else (not render if attempt == 1 else True)
-        render_param = "&render=true" if use_render else ""
+        # Expanded explicit fallback checks to guarantee clean syntax processing
+        if attempt == 0:
+            use_render = render
+        elif attempt == 1:
+            use_render = not render
+        else:
+            use_render = True
+            
+        if use_render:
+            render_param = "&render=true"
+        else:
+            render_param = ""
+            
         proxy_url = f"http://api.scraperapi.com?api_key={SCRAPERAPI_KEY}&url={url}{render_param}&country_code=us"
         
         try:
@@ -53,7 +62,6 @@ def _fetch(url, render=False):
 def search_player(name: str):
     name_clean = name.lower().strip()
     
-    # Fast-pass cache for major star-tier requests
     STATIC = {
         "donk": ("21167", "donk"), 
         "zywoo": ("11893", "zywoo"), 
@@ -67,11 +75,13 @@ def search_player(name: str):
         return STATIC[name_clean][0], STATIC[name_clean][1], STATIC[name_clean][1].title()
 
     html, final_url = _fetch(f"{HLTV_BASE}/search?query={name_clean}", render=False)
-    if not html: return None
+    if not html: 
+        return None
     
     if final_url and "/player/" in final_url:
         m = re.search(r'/player/(\d+)/([^/]+)', final_url)
-        if m: return m.group(1), m.group(2), m.group(2).title()
+        if m: 
+            return m.group(1), m.group(2), m.group(2).title()
 
     found_links = re.findall(r'href="/player/(\d+)/([^"/\s>]+)"', html)
     if not found_links:
@@ -91,19 +101,21 @@ def search_player(name: str):
 # =========================================================
 def get_player_info(player_name, line=0.0, opponent="N/A"):
     search_res = search_player(player_name)
-    if not search_res: return f"FAIL: Could not find player '{player_name}' on HLTV."
+    if not search_res: 
+        return f"FAIL: Could not find player '{player_name}' on HLTV."
     pid, slug, display = search_res
     print(f"TARGET ACQUIRED: {display} (ID: {pid})")
     
     stats_url = f"{HLTV_BASE}/stats/players/matches/{pid}/{slug}"
     html, _ = _fetch(stats_url, render=True)
-    if not html: return "FAIL: Stats page blocked by Cloudflare after 3 retries."
+    if not html: 
+        return "FAIL: Stats page blocked by Cloudflare after 3 retries."
 
     soup = BeautifulSoup(html, "html.parser")
     table = soup.find("table", {"class": "stats-table"})
-    if not table: return "FAIL: Stats table layout changed on HLTV."
+    if not table: 
+        return "FAIL: Stats table layout changed on HLTV."
 
-    # Map headers dynamically to isolate data accurately
     date_idx, opp_idx, result_idx, kd_idx = 0, 2, 5, 6
 
     rows = table.find("tbody").find_all("tr")
@@ -113,7 +125,8 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
 
     for row in rows:
         cols = row.find_all("td")
-        if len(cols) <= max(date_idx, opp_idx, result_idx, kd_idx): continue
+        if len(cols) <= max(date_idx, opp_idx, result_idx, kd_idx): 
+            continue
         
         date = cols[date_idx].text.strip()
         opp = cols[opp_idx].text.strip().lower()
@@ -123,45 +136,52 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
         opp_clean = re.sub(r'[^a-zA-Z0-9]', '', opp)
         
         try:
-            # Slices numbers using raw digits, ignoring any (OT) formatting loops
             res_nums = re.findall(r'\d+', res_text)
             kd_nums = re.findall(r'\d+', kd_text)
             
-            if len(kd_nums) < 2 or len(res_nums) < 2: continue
+            if len(kd_nums) < 2 or len(res_nums) < 2: 
+                continue
             
             kills = int(kd_nums[0])
             m_rounds = int(res_nums[0]) + int(res_nums[1])
             
             key = f"{date}_{opp_clean}"
             if key != current_key:
-                if current_maps: series_groups.append(current_maps)
+                if current_maps: 
+                    series_groups.append(current_maps)
                 current_key, current_maps = key, []
             current_maps.append({"kills": kills, "rounds": m_rounds})
-        except: continue
+        except: 
+            continue
         
-    if current_maps: series_groups.append(current_maps)
+    if current_maps: 
+        series_groups.append(current_maps)
 
     final_series_totals = []
     total_k, total_r = 0, 0
     
     for group in series_groups:
-        if len(final_series_totals) >= 10: break
+        if len(final_series_totals) >= 10: 
+            break
         if len(group) >= 2:
-            # Reversal map isolation gets Map 1 and Map 2 perfectly out of chronological listings
             m1, m2 = group[-1], group[-2]
             combined_k = m1["kills"] + m2["kills"]
             final_series_totals.append(combined_k)
             total_k += combined_k
             total_r += (m1["rounds"] + m2["rounds"])
 
-    if not final_series_totals: return "FAIL: Not enough valid multi-map series found."
+    if not final_series_totals: 
+        return "FAIL: Not enough valid multi-map series found."
 
-    # Statistical Projections Models
     kpr = total_k / total_r if total_r > 0 else 0.80
-    proj_rounds = 44 if any(x in opponent.lower() for x in ["vitality", "g2", "faze", "mouz", "navi"]) else 42
+    
+    if any(x in opponent.lower() for x in ["vitality", "g2", "faze", "mouz", "navi"]):
+        proj_rounds = 44
+    else:
+        proj_rounds = 42
+        
     expected_kills = round(kpr * proj_rounds, 1)
     
-    # 100,000 Monte Carlo Simulation Runs
     import numpy as np
     sim = np.random.poisson(expected_kills, 100000)
     over_prob = (np.sum(sim > line) / 100000) * 100
@@ -172,6 +192,18 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
     median = _stats.median(final_series_totals)
     hits = sum(1 for x in final_series_totals if x > line)
     hit_rate_pct = (hits / len(final_series_totals)) * 100
+    
+    if over_prob > 60:
+        bet_rec = "OVER"
+    elif over_prob < 40:
+        bet_rec = "UNDER"
+    else:
+        bet_rec = "NO BET"
+        
+    if abs(edge_delta) >= 10.0:
+        mispriced = "YES"
+    else:
+        mispriced = "NO"
     
     return {
         "Player": display,
@@ -189,8 +221,8 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
         "Over probability": f"{round(over_prob, 1)}%",
         "Under probability": f"{round(under_prob, 1)}%",
         "Edge vs line": f"{round(edge_delta, 1)}%",
-        "Mispriced or not": "YES" if abs(edge_delta) >= 10.0 else "NO",
+        "Mispriced or not": mispriced,
         "Final grade": f"{hits}/{len(final_series_totals)}",
-        "Bet recommendation": "OVER" if over_prob > 60 else "UNDER" if over_prob < 40 else "NO BET",
+        "Bet recommendation": bet_rec,
         "Recent totals": final_series_totals
     }
