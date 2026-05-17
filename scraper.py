@@ -96,7 +96,7 @@ def search_player(name: str):
     return None
 
 # =========================================================
-# ADAPTIVE TABLE PARSER - FIXES THE COLUMN INDEX PROBLEM
+# ADAPTIVE TABLE PARSER - HANDLES CURRENT HLTV FORMAT
 # =========================================================
 def _parse_stats_table(soup):
     """Dynamically identifies column positions instead of hardcoding indices"""
@@ -110,15 +110,26 @@ def _parse_stats_table(soup):
         headers = [th.text.strip().lower() for th in thead.find_all("th")]
         print(f"DETECTED COLUMNS: {headers}")
         
-        # Map column names to indices
+        # Map column names to indices - UPDATED TO HANDLE CURRENT HLTV FORMAT
         date_idx = next((i for i, h in enumerate(headers) if "date" in h), 0)
-        opp_idx = next((i for i, h in enumerate(headers) if "opponent" in h or "event" in h), 2)
-        result_idx = next((i for i, h in enumerate(headers) if "result" in h or "map" in h), 5)
-        kd_idx = next((i for i, h in enumerate(headers) if "k-d" in h or "k - d" in h), 6)
+        opp_idx = next((i for i, h in enumerate(headers) if "opponent" in h), 2)
+        
+        # Handle both "result" and separate t1/t2 columns
+        if any("t1" in h for h in headers):
+            # New format with separate t1/t2 columns
+            t1_idx = next((i for i, h in enumerate(headers) if h == "t1"), 3)
+            t2_idx = next((i for i, h in enumerate(headers) if h == "t2"), 4)
+            result_idx = (t1_idx, t2_idx)  # Store as tuple
+        else:
+            result_idx = next((i for i, h in enumerate(headers) if "result" in h), 5)
+        
+        kd_idx = next((i for i, h in enumerate(headers) if "k - d" in h or "k-d" in h), 6)
+        
+        print(f"INDICES: date={date_idx}, opp={opp_idx}, result={result_idx}, kd={kd_idx}")
     else:
         # Fallback to original indices if no header found
-        date_idx, opp_idx, result_idx, kd_idx = 0, 2, 5, 6
-        print(f"NO HEADER FOUND - Using fallback indices: date={date_idx}, opp={opp_idx}, result={result_idx}, kd={kd_idx}")
+        date_idx, opp_idx, result_idx, kd_idx = 0, 2, (3, 4), 6
+        print(f"NO HEADER FOUND - Using fallback indices")
     
     return table, date_idx, opp_idx, result_idx, kd_idx
 
@@ -155,21 +166,37 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
 
     for row in rows:
         cols = row.find_all("td")
-        if len(cols) <= max(date_idx, opp_idx, result_idx, kd_idx): 
+        if len(cols) < 7:  # Need at least 7 columns
             continue
         
         try:
             date = cols[date_idx].text.strip()
             opp = cols[opp_idx].text.strip().lower()
-            res_text = cols[result_idx].text.strip()
             kd_text = cols[kd_idx].text.strip()
             
-            res_nums = re.findall(r'\d+', res_text)
+            # Handle result extraction - supports both tuple (t1, t2) and single result column
+            if isinstance(result_idx, tuple):
+                t1_text = cols[result_idx[0]].text.strip()
+                t2_text = cols[result_idx[1]].text.strip()
+                t1_nums = re.findall(r'\d+', t1_text)
+                t2_nums = re.findall(r'\d+', t2_text)
+                if t1_nums and t2_nums:
+                    m_rounds = int(t1_nums[0]) + int(t2_nums[0])
+                else:
+                    continue
+            else:
+                res_text = cols[result_idx].text.strip()
+                res_nums = re.findall(r'\d+', res_text)
+                if len(res_nums) >= 2:
+                    m_rounds = int(res_nums[0]) + int(res_nums[1])
+                else:
+                    continue
+            
+            # Extract kills from K-D column
             kd_nums = re.findall(r'\d+', kd_text)
             
-            if len(kd_nums) >= 2 and len(res_nums) >= 2:
+            if len(kd_nums) >= 1:  # Just need kills (first number)
                 kills = int(kd_nums[0])
-                m_rounds = int(res_nums[0]) + int(res_nums[1])
                 
                 all_maps.append({
                     "date": date,
@@ -177,6 +204,10 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
                     "kills": kills,
                     "rounds": m_rounds
                 })
+                
+                # Debug: print first 3 successful extractions
+                if len(all_maps) <= 3:
+                    print(f"MAP {len(all_maps)}: {date} vs {opp} - {kills}K in {m_rounds}R")
         except Exception as e:
             continue
 
