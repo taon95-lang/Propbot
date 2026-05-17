@@ -6,7 +6,6 @@ import functools
 import random
 from bs4 import BeautifulSoup
 
-# Ensure real-time print updates populate Render service streams immediately
 print = functools.partial(print, flush=True)
 
 try:
@@ -47,11 +46,11 @@ def _fetch(url, render=False):
             if r.status_code == 200 and len(r.text) > 1000:
                 return r.text, r.headers.get("Sa-Final-Url", url)
                 
-            print(f"ATTEMPT {attempt + 1} FAILED: Status code {r.status_code}")
-            time.sleep(1.5)
+            print(f"ATTEMPT {attempt + 1} FAILED: Status code {r.status_code}, Length: {len(r.text)}")
+            time.sleep(2)
         except Exception as e:
             print(f"ATTEMPT {attempt + 1} EXCEPTION: {e}")
-            time.sleep(1.5)
+            time.sleep(2)
             
     return None, None
 
@@ -96,7 +95,34 @@ def search_player(name: str):
     return None
 
 # =========================================================
-# THE PERFECT NO-GUESSWORK DIRECT INDEX ENGINE
+# ADAPTIVE TABLE PARSER - FIXES THE COLUMN INDEX PROBLEM
+# =========================================================
+def _parse_stats_table(soup):
+    """Dynamically identifies column positions instead of hardcoding indices"""
+    table = soup.find("table", {"class": "stats-table"})
+    if not table:
+        return None
+    
+    # Find header row to identify column positions
+    thead = table.find("thead")
+    if thead:
+        headers = [th.text.strip().lower() for th in thead.find_all("th")]
+        print(f"DETECTED COLUMNS: {headers}")
+        
+        # Map column names to indices
+        date_idx = next((i for i, h in enumerate(headers) if "date" in h), 0)
+        opp_idx = next((i for i, h in enumerate(headers) if "opponent" in h or "event" in h), 2)
+        result_idx = next((i for i, h in enumerate(headers) if "result" in h or "map" in h), 5)
+        kd_idx = next((i for i, h in enumerate(headers) if "k-d" in h or "k - d" in h), 6)
+    else:
+        # Fallback to your original indices if no header found
+        date_idx, opp_idx, result_idx, kd_idx = 0, 2, 5, 6
+        print(f"NO HEADER FOUND - Using fallback indices: date={date_idx}, opp={opp_idx}, result={result_idx}, kd={kd_idx}")
+    
+    return table, date_idx, opp_idx, result_idx, kd_idx
+
+# =========================================================
+# THE PERFECT NO-GUESSWORK DIRECT INDEX ENGINE (FIXED)
 # =========================================================
 def get_player_info(player_name, line=0.0, opponent="N/A"):
     search_res = search_player(player_name)
@@ -108,20 +134,23 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
     stats_url = f"{HLTV_BASE}/stats/players/matches/{pid}/{slug}"
     html, _ = _fetch(stats_url, render=True)
     if not html: 
-        return "FAIL: Stats page blocked by Cloudflare after 3 retries."
+        return "FAIL: Stats page blocked or ScraperAPI failed after 3 retries. Check SCRAPERAPI_KEY and credits."
 
     soup = BeautifulSoup(html, "html.parser")
-    table = soup.find("table", {"class": "stats-table"})
-    if not table: 
-        return "FAIL: Stats table layout changed on HLTV."
-
-    # Explicit hardcoded index alignment matching the table's absolute structure layout
-    date_idx, opp_idx, result_idx, kd_idx = 0, 2, 5, 6
+    
+    # Use adaptive parser instead of hardcoded indices
+    parse_result = _parse_stats_table(soup)
+    if not parse_result:
+        return "FAIL: Stats table layout not found or changed on HLTV."
+    
+    table, date_idx, opp_idx, result_idx, kd_idx = parse_result
 
     rows = table.find("tbody").find_all("tr")
     series_groups = []
     current_key = None
     current_maps = []
+
+    print(f"PROCESSING {len(rows)} ROWS FROM STATS TABLE...")
 
     for row in rows:
         cols = row.find_all("td")
@@ -136,7 +165,6 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
         opp_clean = re.sub(r'[^a-zA-Z0-9]', '', opp)
         
         try:
-            # Direct index number isolation completely bypasses custom column dash text variations
             res_nums = re.findall(r'\d+', res_text)
             kd_nums = re.findall(r'\d+', kd_text)
             
@@ -152,11 +180,14 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
                     series_groups.append(current_maps)
                 current_key, current_maps = key, []
             current_maps.append({"kills": kills, "rounds": m_rounds})
-        except: 
+        except Exception as e: 
+            print(f"ROW PARSE ERROR: {e} | Row data: {[c.text.strip() for c in cols]}")
             continue
         
     if current_maps: 
         series_groups.append(current_maps)
+
+    print(f"FOUND {len(series_groups)} TOTAL SERIES")
 
     final_series_totals = []
     total_k, total_r = 0, 0
@@ -172,7 +203,10 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
             total_r += (m1["rounds"] + m2["rounds"])
 
     if not final_series_totals: 
-        return "FAIL: Not enough valid multi-map series found."
+        return "FAIL: Not enough valid multi-map series found. Player may not have recent BO3 data."
+
+    print(f"FINAL SAMPLE: {len(final_series_totals)} BO3 series (Maps 1-2 only)")
+    print(f"RECENT TOTALS: {final_series_totals}")
 
     kpr = total_k / total_r if total_r > 0 else 0.80
     
