@@ -53,13 +53,14 @@ def _fetch(url, render=False):
 def search_player(name: str):
     name_clean = name.lower().strip()
     
-    # Fast-pass cache for major star-tier requests
+    # Pre-seeded fast-cache for immediate star queries
     STATIC = {
         "donk": ("21167", "donk"), 
         "zywoo": ("11893", "zywoo"), 
         "m0nesy": ("19230", "m0nesy"), 
         "niko": ("3741", "niko"),
         "jl": ("19206", "jl"),
+        "xertion": ("20312", "xertion"),
         "jamyoung": ("19645", "jamyoung")
     }
     if name_clean in STATIC: 
@@ -68,32 +69,25 @@ def search_player(name: str):
     html, final_url = _fetch(f"{HLTV_BASE}/search?query={name_clean}", render=False)
     if not html: return None
     
-    # Context 1: Safe profile page redirect evaluation
     if final_url and "/player/" in final_url:
         m = re.search(r'/player/(\d+)/([^/]+)', final_url)
         if m: return m.group(1), m.group(2), m.group(2).title()
 
-    # Context 2: Structural parsing filter to catch clean anchor paths strictly
     found_links = re.findall(r'href="/player/(\d+)/([^"/\s>]+)"', html)
-    
     if not found_links:
-        # Fallback tracking if target uses a statistical mapping variant
         found_links = re.findall(r'href="/stats/players/(\d+)/([^"/\s>]+)"', html)
-
     if not found_links:
-        # Final raw scraping check if HTML wraps tags loosely inside query variables
         found_links = re.findall(r'/player/(\d+)/([^"\'\s>?&)]+)', html)
 
     if found_links:
         pid, slug = found_links[0]
-        # Extreme string normalization step strips trailing layout parameters safely
         slug_clean = slug.split('"')[0].split("'")[0].split(')')[0].split('?')[0].split('&')[0].strip()
         return pid, slug_clean, slug_clean.replace("-", " ").title()
         
     return None
 
 # =========================================================
-# THE PERFECT GOLD SCAN ENGINE
+# THE PERFECT DATE-CLUSTERED SCAN ENGINE
 # =========================================================
 def get_player_info(player_name, line=0.0, opponent="N/A"):
     search_res = search_player(player_name)
@@ -111,7 +105,7 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
 
     rows = table.find("tbody").find_all("tr")
     series_groups = []
-    current_key = None
+    current_date = None
     current_maps = []
 
     for row in rows:
@@ -119,8 +113,8 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
         if len(cols) < 5: continue
         
         date = cols[0].text.strip()
-        opp = cols[2].text.strip().lower()
         
+        # Pull layout strings matching standard mathematical dash structures
         hyphen_cells = []
         for cell in cols:
             txt = cell.get_text(strip=True)
@@ -136,11 +130,14 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
             r_nums = re.findall(r'\d+', res_text)
             m_rounds = sum(int(n) for n in r_nums) if len(r_nums) >= 2 else 24
             
-            key = f"{date}_{opp}"
-            if key != current_key:
-                if current_maps: series_groups.append(current_maps)
-                current_key, current_maps = key, []
-            current_maps.append({"kills": kills, "rounds": m_rounds})
+            # GOLD STANDARD FIXED CLUSTERING: Group rows matching purely by sequential date
+            if current_date and date == current_date:
+                current_maps.append({"kills": kills, "rounds": m_rounds})
+            else:
+                if current_maps: 
+                    series_groups.append(current_maps)
+                current_date = date
+                current_maps = [{"kills": kills, "rounds": m_rounds}]
         except: continue
         
     if current_maps: series_groups.append(current_maps)
@@ -151,6 +148,7 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
     for group in series_groups:
         if len(final_series_totals) >= 10: break
         if len(group) >= 2:
+            # Reversal map isolation logic extracts Map 1 and Map 2 perfectly out of 3
             m1, m2 = group[-1], group[-2]
             combined_k = m1["kills"] + m2["kills"]
             final_series_totals.append(combined_k)
@@ -164,7 +162,7 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
     proj_rounds = 44 if any(x in opponent.lower() for x in ["vitality", "g2", "faze", "mouz", "navi"]) else 42
     expected_kills = round(kpr * proj_rounds, 1)
     
-    # 100,000 Monte Carlo Simulations Runs
+    # 100,000 Monte Carlo Simulation Runs
     import numpy as np
     sim = np.random.poisson(expected_kills, 100000)
     over_prob = (np.sum(sim > line) / 100000) * 100
