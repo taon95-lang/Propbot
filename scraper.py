@@ -65,7 +65,7 @@ def _fetch(url):
     }
 
     # =====================================================
-    # SCRAPER API
+    # SCRAPERAPI
     # =====================================================
 
     if SCRAPERAPI_KEY:
@@ -236,12 +236,14 @@ def _parse_match_kills(
         }
 
     # =====================================================
-    # FIND ROWS
+    # FIND ALL ROWS
     # =====================================================
 
     rows = soup.find_all("tr")
 
     print(f"TOTAL ROWS: {len(rows)}")
+
+    slug_lower = player_slug.lower()
 
     for tr in rows:
 
@@ -258,13 +260,14 @@ def _parse_match_kills(
             # PLAYER CHECK
             # =================================================
 
-            if player_slug.lower() not in row_lower:
+            if slug_lower not in row_lower:
                 continue
 
-            print(f"PLAYER ROW: {row_text}")
+            print("PLAYER ROW FOUND:")
+            print(row_text)
 
             # =================================================
-            # FIND K-D
+            # FIND ALL KD PAIRS
             # =================================================
 
             kd_matches = re.findall(
@@ -273,27 +276,32 @@ def _parse_match_kills(
             )
 
             if not kd_matches:
+
+                print("NO KD FOUND")
+
                 continue
 
-            kills = int(
-                kd_matches[0][0]
-            )
+            kills = None
 
-            deaths = int(
-                kd_matches[0][1]
-            )
+            for kd in kd_matches:
 
-            print(
-                f"KILLS={kills} "
-                f"DEATHS={deaths}"
-            )
+                k = int(kd[0])
+                d = int(kd[1])
 
-            # =================================================
-            # SAFETY FILTER
-            # =================================================
+                # realistic player kill filter
+                if 8 <= k <= 45:
 
-            if kills < 8 or kills > 45:
+                    kills = k
+
+                    break
+
+            if kills is None:
+
+                print("NO VALID KILLS")
+
                 continue
+
+            print(f"KILLS: {kills}")
 
             # =================================================
             # HEADSHOTS
@@ -301,17 +309,17 @@ def _parse_match_kills(
 
             hs = 0
 
-            hs_match = re.search(
+            hs_matches = re.findall(
                 r'\((\d+)\)',
                 row_text
             )
 
-            if hs_match:
+            if hs_matches:
 
                 try:
 
                     hs = int(
-                        hs_match.group(1)
+                        hs_matches[0]
                     )
 
                 except:
@@ -349,14 +357,21 @@ def _parse_match_kills(
 
             })
 
+            print(
+                f"MAP SAVED -> "
+                f"K:{kills} "
+                f"HS:{hs} "
+                f"R:{rating}"
+            )
+
         except Exception as e:
 
             print(
-                f"PARSER ERROR: {e}"
+                f"ROW ERROR: {e}"
             )
 
     print(
-        f"MAPS EXTRACTED: "
+        f"FINAL MAP COUNT: "
         f"{len(maps_data)}"
     )
 
@@ -419,7 +434,7 @@ def get_player_info(
         )
 
     # =====================================================
-    # LAST 10 MAPS ONLY
+    # LAST 10 MAPS
     # =====================================================
 
     maps = maps[:10]
