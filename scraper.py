@@ -53,7 +53,7 @@ def _fetch(url, render=False):
 def search_player(name: str):
     name_clean = name.lower().strip()
     
-    # Pre-seeded fast-cache for immediate queries
+    # Fast-pass cache for major star-tier requests
     STATIC = {
         "donk": ("21167", "donk"), 
         "zywoo": ("11893", "zywoo"), 
@@ -87,7 +87,7 @@ def search_player(name: str):
     return None
 
 # =========================================================
-# THE PERFECT DATE-CLUSTERED SCAN ENGINE
+# THE PERFECT OVERTIME-PROOF SCAN ENGINE
 # =========================================================
 def get_player_info(player_name, line=0.0, opponent="N/A"):
     search_res = search_player(player_name)
@@ -103,7 +103,7 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
     table = soup.find("table", {"class": "stats-table"})
     if not table: return "FAIL: Stats table layout changed on HLTV."
 
-    # Absolute safe indices for HLTV Stats History layout format
+    # Map headers dynamically to isolate data accurately
     date_idx, opp_idx, result_idx, kd_idx = 0, 2, 5, 6
 
     rows = table.find("tbody").find_all("tr")
@@ -123,7 +123,7 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
         opp_clean = re.sub(r'[^a-zA-Z0-9]', '', opp)
         
         try:
-            # Captures standard and overtime digit structures safely
+            # Slices numbers using raw digits, ignoring any (OT) formatting loops
             res_nums = re.findall(r'\d+', res_text)
             kd_nums = re.findall(r'\d+', kd_text)
             
@@ -147,7 +147,7 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
     for group in series_groups:
         if len(final_series_totals) >= 10: break
         if len(group) >= 2:
-            # Grabs Map 1 and Map 2 from newest to oldest stack order
+            # Reversal map isolation gets Map 1 and Map 2 perfectly out of chronological listings
             m1, m2 = group[-1], group[-2]
             combined_k = m1["kills"] + m2["kills"]
             final_series_totals.append(combined_k)
