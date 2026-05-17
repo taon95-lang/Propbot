@@ -5,6 +5,7 @@ import statistics as _stats
 import functools
 import random
 from bs4 import BeautifulSoup
+from collections import defaultdict
 
 # Ensure real-time print updates populate Render service streams immediately
 print = functools.partial(print, flush=True)
@@ -216,22 +217,32 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
     if len(all_maps) < 2:
         return f"FAIL: Only found {len(all_maps)} maps. Player may not have recent match data on HLTV."
 
-    # Group maps into series by date AND opponent
+    # SMARTER SERIES GROUPING - handles non-consecutive maps from same series
+    # Group all maps by date + opponent
+    series_dict = defaultdict(list)
+    for map_data in all_maps:
+        key = f"{map_data['date']}_{map_data['opponent']}"
+        series_dict[key].append(map_data)
+
+    # Extract series that have 2+ maps (BO2/BO3/BO5)
     series_groups = []
-    i = 0
-    while i < len(all_maps) - 1:
-        # Check if next map is same date/opponent (same series)
-        current = all_maps[i]
-        next_map = all_maps[i + 1]
-        
-        if current["date"] == next_map["date"] and current["opponent"] == next_map["opponent"]:
-            # This is a multi-map series
-            series_groups.append([current, next_map])
-            i += 2  # Skip both maps
-        else:
-            i += 1  # Single map, skip it
+    for key, maps in series_dict.items():
+        if len(maps) >= 2:
+            series_groups.append(maps[:2])  # Take first 2 maps only (Maps 1-2)
 
     print(f"FOUND {len(series_groups)} MULTI-MAP SERIES")
+
+    # FALLBACK: If no multi-map series found, use last 10 BO1s as single-map "series"
+    if not series_groups:
+        print("NO MULTI-MAP SERIES FOUND - FALLING BACK TO BO1 DATA")
+        for i in range(0, len(all_maps) - 1, 2):
+            if len(series_groups) >= 10:
+                break
+            # Pair consecutive BO1s together to approximate a 2-map sample
+            series_groups.append([all_maps[i], all_maps[i + 1]])
+        
+        if not series_groups:
+            return f"FAIL: Found {len(all_maps)} maps but insufficient data to create samples."
 
     # Now process the series
     final_series_totals = []
@@ -246,9 +257,9 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
             total_r += combined_r
 
     if not final_series_totals:
-        return f"FAIL: Found {len(all_maps)} maps but no multi-map series. Player may have only played BO1s recently."
+        return f"FAIL: Could not create valid 2-map samples from {len(all_maps)} maps found."
 
-    print(f"FINAL SAMPLE: {len(final_series_totals)} BO3 series (Maps 1-2 only)")
+    print(f"FINAL SAMPLE: {len(final_series_totals)} series (Maps 1-2 combined)")
     print(f"RECENT TOTALS: {final_series_totals}")
 
     kpr = total_k / total_r if total_r > 0 else 0.80
