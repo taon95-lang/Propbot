@@ -69,7 +69,8 @@ def search_player(name: str):
         "niko": ("3741", "niko"),
         "jl": ("19206", "jl"),
         "xertion": ("20312", "xertion"),
-        "jamyoung": ("19645", "jamyoung")
+        "jamyoung": ("19645", "jamyoung"),
+        "h4san4tor": ("22189", "h4san4tor")
     }
     if name_clean in STATIC: 
         return STATIC[name_clean][0], STATIC[name_clean][1], STATIC[name_clean][1].title()
@@ -165,7 +166,7 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
     # Track all maps regardless of series grouping first
     all_maps = []
 
-    for row in rows:
+    for i, row in enumerate(rows):
         cols = row.find_all("td")
         if len(cols) < 7:  # Need at least 7 columns
             continue
@@ -174,8 +175,17 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
             date = cols[date_idx].text.strip()
             opp = cols[opp_idx].text.strip().lower()
             
-            # CRITICAL FIX: Extract K-D text ONLY from the K-D column, not opponent column
+            # DIAGNOSTIC: Print ALL column data for first 3 rows
+            if i < 3:
+                print(f"\n=== ROW {i} FULL DATA ===")
+                for idx, col in enumerate(cols):
+                    print(f"  Column {idx}: '{col.text.strip()}'")
+            
+            # CRITICAL FIX: Extract K-D text ONLY from the K-D column
             kd_text = cols[kd_idx].text.strip()
+            
+            if i < 3:
+                print(f"K-D COLUMN (index {kd_idx}): '{kd_text}'")
             
             # Handle result extraction - supports both tuple (t1, t2) and single result column
             if isinstance(result_idx, tuple):
@@ -195,16 +205,20 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
                 else:
                     continue
             
-            # CRITICAL FIX: Parse K-D format "XX - YY" or "XX-YY"
-            # K-D column should look like "15 - 18" or "22-14"
+            # Try multiple K-D formats
             kd_match = re.search(r'(\d+)\s*-\s*(\d+)', kd_text)
             
             if kd_match:
-                kills = int(kd_match.group(1))  # First number is kills
-                deaths = int(kd_match.group(2))  # Second number is deaths
+                kills = int(kd_match.group(1))
+                deaths = int(kd_match.group(2))
                 
-                # Sanity check: kills should be reasonable (1-50 range for a single map)
+                if i < 3:
+                    print(f"✓ EXTRACTED: {kills}K/{deaths}D")
+                
+                # Sanity check
                 if kills < 1 or kills > 50:
+                    if i < 3:
+                        print(f"✗ SANITY FAIL: {kills}K out of range")
                     continue
                 
                 all_maps.append({
@@ -214,17 +228,15 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
                     "rounds": m_rounds
                 })
                 
-                # Debug: print first 5 successful extractions
                 if len(all_maps) <= 5:
                     print(f"MAP {len(all_maps)}: {date} vs {opp} - {kills}K/{deaths}D in {m_rounds}R")
             else:
-                # K-D column doesn't match expected format
-                if len(all_maps) <= 2:
-                    print(f"SKIP: Could not parse K-D from '{kd_text}'")
+                if i < 3:
+                    print(f"✗ REGEX FAILED on '{kd_text}'")
                 continue
                 
         except Exception as e:
-            if len(all_maps) <= 2:
+            if i < 3:
                 print(f"ROW ERROR: {e}")
             continue
 
@@ -233,38 +245,33 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
     if len(all_maps) < 2:
         return f"FAIL: Only found {len(all_maps)} maps. Player may not have recent match data on HLTV."
 
-    # SMARTER SERIES GROUPING - handles non-consecutive maps from same series
-    # Group all maps by date + opponent
+    # SMARTER SERIES GROUPING
     series_dict = defaultdict(list)
     for map_data in all_maps:
         key = f"{map_data['date']}_{map_data['opponent']}"
         series_dict[key].append(map_data)
 
-    # Extract series that have 2+ maps (BO2/BO3/BO5)
     series_groups = []
     for key, maps in series_dict.items():
         if len(maps) >= 2:
-            series_groups.append(maps[:2])  # Take first 2 maps only (Maps 1-2)
+            series_groups.append(maps[:2])
 
     print(f"FOUND {len(series_groups)} MULTI-MAP SERIES")
 
-    # FALLBACK: If no multi-map series found, use last 10 BO1s as single-map "series"
     if not series_groups:
         print("NO MULTI-MAP SERIES FOUND - FALLING BACK TO BO1 DATA")
         for i in range(0, len(all_maps) - 1, 2):
             if len(series_groups) >= 10:
                 break
-            # Pair consecutive BO1s together to approximate a 2-map sample
             series_groups.append([all_maps[i], all_maps[i + 1]])
         
         if not series_groups:
             return f"FAIL: Found {len(all_maps)} maps but insufficient data to create samples."
 
-    # Now process the series
     final_series_totals = []
     total_k, total_r = 0, 0
 
-    for group in series_groups[:10]:  # Take last 10 series
+    for group in series_groups[:10]:
         if len(group) >= 2:
             combined_k = group[0]["kills"] + group[1]["kills"]
             combined_r = group[0]["rounds"] + group[1]["rounds"]
