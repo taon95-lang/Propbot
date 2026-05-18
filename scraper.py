@@ -173,6 +173,8 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
         try:
             date = cols[date_idx].text.strip()
             opp = cols[opp_idx].text.strip().lower()
+            
+            # CRITICAL FIX: Extract K-D text ONLY from the K-D column, not opponent column
             kd_text = cols[kd_idx].text.strip()
             
             # Handle result extraction - supports both tuple (t1, t2) and single result column
@@ -193,11 +195,17 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
                 else:
                     continue
             
-            # Extract kills from K-D column
-            kd_nums = re.findall(r'\d+', kd_text)
+            # CRITICAL FIX: Parse K-D format "XX - YY" or "XX-YY"
+            # K-D column should look like "15 - 18" or "22-14"
+            kd_match = re.search(r'(\d+)\s*-\s*(\d+)', kd_text)
             
-            if len(kd_nums) >= 1:  # Just need kills (first number)
-                kills = int(kd_nums[0])
+            if kd_match:
+                kills = int(kd_match.group(1))  # First number is kills
+                deaths = int(kd_match.group(2))  # Second number is deaths
+                
+                # Sanity check: kills should be reasonable (1-50 range for a single map)
+                if kills < 1 or kills > 50:
+                    continue
                 
                 all_maps.append({
                     "date": date,
@@ -206,10 +214,18 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
                     "rounds": m_rounds
                 })
                 
-                # Debug: print first 3 successful extractions
-                if len(all_maps) <= 3:
-                    print(f"MAP {len(all_maps)}: {date} vs {opp} - {kills}K in {m_rounds}R")
+                # Debug: print first 5 successful extractions
+                if len(all_maps) <= 5:
+                    print(f"MAP {len(all_maps)}: {date} vs {opp} - {kills}K/{deaths}D in {m_rounds}R")
+            else:
+                # K-D column doesn't match expected format
+                if len(all_maps) <= 2:
+                    print(f"SKIP: Could not parse K-D from '{kd_text}'")
+                continue
+                
         except Exception as e:
+            if len(all_maps) <= 2:
+                print(f"ROW ERROR: {e}")
             continue
 
     print(f"TOTAL MAPS FOUND: {len(all_maps)}")
