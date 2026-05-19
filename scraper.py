@@ -134,10 +134,12 @@ def _error_response(msg, player_name, line, opponent):
         "Final Grade": "Below 5/10 (No Bet)",
         "Bet recommendation": "NO BET",
         "Bet Recommendation": "NO BET",
-        # Total security matrix for key lookups
+        # Total casing variation matrix for totals lookups
         "Recent Totals (M1+M2 Combined)": [],
         "Recent Totals (Maps 1-2 Only)": [],
         "Recent Totals": [],
+        "Recent totals": [],
+        "recent Totals": [],
         "recent totals": [],
         "Recent Individual Map Kills": [],
         "error": msg
@@ -413,10 +415,12 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
             "Final Grade": grade_str,
             "Bet recommendation": bet_rec,
             "Bet Recommendation": bet_rec,
-            # Complete key mirrored aliases for bot layouts
+            # Complete key mirrored safety grid for the outer bot parser
             "Recent Totals (M1+M2 Combined)": final_series_totals,
             "Recent Totals (Maps 1-2 Only)": final_series_totals,
             "Recent Totals": final_series_totals,
+            "Recent totals": final_series_totals,
+            "recent Totals": final_series_totals,
             "recent totals": final_series_totals,
             "Recent Individual Map Kills": individual_map_kills[:20]
         }
