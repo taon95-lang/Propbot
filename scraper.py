@@ -97,29 +97,32 @@ def search_player(name: str):
     return None
 
 # =========================================================
-# SAFE DICTIONARY FALLBACK FOR ERRORS
+# CRASH-PROOF DICTIONARY FALLBACK FOR ERRORS
 # =========================================================
 def _error_response(msg, player_name, line, opponent):
     return {
         "Player": player_name.title(),
         "Match": f"vs {opponent.title()}",
         "Prop": f"{line} Kills",
-        "Role": "N/A",
-        "Recent sample used": "None",
+        "Prop Line": f"{line} Kills",
+        "Role": "Star / Entry Rifler",
+        "Recent sample used": "None Available",
         "Recent average": 0.0,
         "Recent median": 0.0,
-        "Hit rate": "0%",
+        "Hit rate": "0.0%",
         "Projected rounds": 0,
         "Expected kills": 0.0,
         "Simulated mean": 0.0,
         "Standard deviation": 0.0,
-        "Over probability": "0%",
-        "Under probability": "0%",
-        "Edge vs line": "0%",
+        "Over probability": "0.0%",
+        "Under probability": "0.0%",
+        "Edge vs line": "0.0%",
         "Mispriced or not": "NO",
-        "Final grade": "No Bet",
+        "Final grade": "Below 5/10 (No Bet)",
         "Bet recommendation": "NO BET",
+        # Explicit key mapping protection across all naming variations
         "Recent Totals (M1+M2 Combined)": [],
+        "Recent Totals (Maps 1-2 Only)": [],
         "Recent Totals": [],
         "recent totals": [],
         "Recent Individual Map Kills": [],
@@ -362,6 +365,7 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
         "Player": display,
         "Match": f"vs {opponent.title()}",
         "Prop": f"{line} Kills",
+        "Prop Line": f"{line} Kills",
         "Role": "Star / Entry Rifler",
         "Recent sample used": f"Last {len(final_series_totals)} BO3 Series (M1+M2)",
         "Recent average": avg_2map,
@@ -377,8 +381,9 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
         "Mispriced or not": mispriced,
         "Final grade": grade_str,
         "Bet recommendation": bet_rec,
-        # Multiple keys mapped here to ensure compatibility with your layout
+        # Multi-mapped variation safety web for the outer Discord calling script
         "Recent Totals (M1+M2 Combined)": final_series_totals,
+        "Recent Totals (Maps 1-2 Only)": final_series_totals,
         "Recent Totals": final_series_totals,
         "recent totals": final_series_totals,
         "Recent Individual Map Kills": individual_map_kills[:20]
