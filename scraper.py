@@ -181,12 +181,6 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
                 for idx, col in enumerate(cols):
                     print(f"  Column {idx}: '{col.text.strip()}'")
             
-            # CRITICAL FIX: Extract K-D text ONLY from the K-D column
-            kd_text = cols[kd_idx].text.strip()
-            
-            if i < 3:
-                print(f"K-D COLUMN (index {kd_idx}): '{kd_text}'")
-            
             # Handle result extraction - supports both tuple (t1, t2) and single result column
             if isinstance(result_idx, tuple):
                 t1_text = cols[result_idx[0]].text.strip()
@@ -205,35 +199,33 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
                 else:
                     continue
             
-            # Try multiple K-D formats
-            kd_match = re.search(r'(\d+)\s*-\s*(\d+)', kd_text)
-            
-            if kd_match:
-                kills = int(kd_match.group(1))
-                deaths = int(kd_match.group(2))
+            # SCAN ALL COLUMNS FOR K-D PATTERN
+            kd_found = False
+            for col_idx, col in enumerate(cols):
+                col_text = col.text.strip()
+                kd_match = re.search(r'(\d+)\s*-\s*(\d+)', col_text)
                 
-                if i < 3:
-                    print(f"✓ EXTRACTED: {kills}K/{deaths}D")
-                
-                # Sanity check
-                if kills < 1 or kills > 50:
-                    if i < 3:
-                        print(f"✗ SANITY FAIL: {kills}K out of range")
-                    continue
-                
-                all_maps.append({
-                    "date": date,
-                    "opponent": opp,
-                    "kills": kills,
-                    "rounds": m_rounds
-                })
-                
-                if len(all_maps) <= 5:
-                    print(f"MAP {len(all_maps)}: {date} vs {opp} - {kills}K/{deaths}D in {m_rounds}R")
-            else:
-                if i < 3:
-                    print(f"✗ REGEX FAILED on '{kd_text}'")
-                continue
+                if kd_match:
+                    kills = int(kd_match.group(1))
+                    deaths = int(kd_match.group(2))
+                    
+                    # Sanity check: kills should be reasonable
+                    if 1 <= kills <= 50 and 1 <= deaths <= 50:
+                        if len(all_maps) <= 3:
+                            print(f"✓ FOUND K-D in column {col_idx}: {kills}K/{deaths}D from '{col_text}'")
+                        
+                        all_maps.append({
+                            "date": date,
+                            "opponent": opp,
+                            "kills": kills,
+                            "rounds": m_rounds
+                        })
+                        
+                        kd_found = True
+                        break
+
+            if not kd_found and len(all_maps) <= 10:
+                print(f"✗ NO VALID K-D FOUND in any column for row {i}")
                 
         except Exception as e:
             if i < 3:
