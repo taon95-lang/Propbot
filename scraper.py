@@ -107,20 +107,34 @@ def _error_response(msg, player_name, line, opponent):
         "Prop Line": f"{line} Kills",
         "Role": "Star / Entry Rifler",
         "Recent sample used": "None Available",
+        "Recent Sample Used": "None Available",
         "Recent average": 0.0,
+        "Recent Average": 0.0,
         "Recent median": 0.0,
+        "Recent Median": 0.0,
         "Hit rate": "0.0%",
+        "Hit Rate": "0.0%",
         "Projected rounds": 0,
+        "Projected Rounds": 0,
         "Expected kills": 0.0,
+        "Expected Kills": 0.0,
         "Simulated mean": 0.0,
+        "Simulated Mean": 0.0,
         "Standard deviation": 0.0,
+        "Standard Deviation": 0.0,
         "Over probability": "0.0%",
+        "Over Probability": "0.0%",
         "Under probability": "0.0%",
+        "Under Probability": "0.0%",
         "Edge vs line": "0.0%",
+        "Edge vs Line": "0.0%",
         "Mispriced or not": "NO",
+        "Mispriced or Not": "NO",
         "Final grade": "Below 5/10 (No Bet)",
+        "Final Grade": "Below 5/10 (No Bet)",
         "Bet recommendation": "NO BET",
-        # Explicit key mapping protection across all naming variations
+        "Bet Recommendation": "NO BET",
+        # Total security matrix for key lookups
         "Recent Totals (M1+M2 Combined)": [],
         "Recent Totals (Maps 1-2 Only)": [],
         "Recent Totals": [],
@@ -133,258 +147,279 @@ def _error_response(msg, player_name, line, opponent):
 # THE PERFECT CONTENT-SCANNING PROCESSING CORE
 # =========================================================
 def get_player_info(player_name, line=0.0, opponent="N/A"):
-    search_res = search_player(player_name)
-    if not search_res: 
-        return _error_response(f"FAIL: Could not find player '{player_name}' on HLTV.", player_name, line, opponent)
-    pid, slug, display = search_res
-    print(f"TARGET ACQUIRED: {display} (ID: {pid})")
-    
-    stats_url = f"{HLTV_BASE}/stats/players/matches/{pid}/{slug}"
-    html, _ = _fetch(stats_url, render=True)
-    if not html: 
-        return _error_response("FAIL: Stats page blocked or ScraperAPI failed after 3 retries.", display, line, opponent)
-
-    soup = BeautifulSoup(html, "html.parser")
-    table = soup.find("table", {"class": "stats-table"})
-    if not table:
-        return _error_response("FAIL: Stats table layout not found or changed on HLTV.", display, line, opponent)
-    
-    rows = table.find("tbody").find_all("tr")
-    print(f"PROCESSING {len(rows)} ROWS FROM STATS TABLE...")
-
-    all_maps = []
-
-    for i, row in enumerate(rows):
-        cols = row.find_all("td")
-        if len(cols) < 4:
-            continue
+    try:
+        search_res = search_player(player_name)
+        if not search_res: 
+            return _error_response(f"FAIL: Could not find player '{player_name}' on HLTV.", player_name, line, opponent)
+        pid, slug, display = search_res
+        print(f"TARGET ACQUIRED: {display} (ID: {pid})")
         
-        try:
-            cell_texts = [c.text.strip() for c in cols]
-            
-            # Pre-scan for K-D index to safely feed into the round extraction logic fallback
-            kd_idx = -1
-            for col_idx, col in enumerate(cols):
-                col_text = col.text.strip()
-                kd_match = re.search(r'(\d+)\s*-\s*(\d+)', col_text)
-                if kd_match:
-                    k_check = int(kd_match.group(1))
-                    d_check = int(kd_match.group(2))
-                    if 1 <= k_check <= 50 and 1 <= d_check <= 50:
-                        kd_idx = col_idx
-                        break
+        stats_url = f"{HLTV_BASE}/stats/players/matches/{pid}/{slug}"
+        html, _ = _fetch(stats_url, render=True)
+        if not html: 
+            return _error_response("FAIL: Stats page blocked or ScraperAPI failed after 3 retries.", display, line, opponent)
 
-            # 1. IDENTIFY ROUNDS PLAYED
-            m_rounds = 0
-            parentheses_nums = []
-            for txt in cell_texts:
-                p_matches = re.findall(r'\((\d+)\)', txt)
-                for pm in p_matches:
-                    parentheses_nums.append(int(pm))
+        soup = BeautifulSoup(html, "html.parser")
+        table = soup.find("table", {"class": "stats-table"})
+        if not table:
+            return _error_response("FAIL: Stats table layout not found or changed on HLTV.", display, line, opponent)
+        
+        tbody = table.find("tbody")
+        rows = tbody.find_all("tr") if tbody else table.find_all("tr")
+        print(f"PROCESSING {len(rows)} ROWS FROM STATS TABLE...")
+
+        all_maps = []
+
+        for i, row in enumerate(rows):
+            cols = row.find_all("td")
+            if len(cols) < 4:
+                continue
             
-            if len(parentheses_nums) >= 2:
-                m_rounds = parentheses_nums[0] + parentheses_nums[1]
+            try:
+                cell_texts = [c.text.strip() for c in cols]
                 
-            if m_rounds < 10 or m_rounds > 60:
-                for idx, txt in enumerate(cell_texts):
-                    if idx == kd_idx:
-                        continue
-                    m = re.search(r'^(\d+)\s*-\s*(\d+)$', txt)
-                    if m:
-                        s1 = int(m.group(1))
-                        s2 = int(m.group(2))
-                        if 13 <= (s1 + s2) <= 50:
-                            m_rounds = s1 + s2
+                # Pre-scan for K-D index to safely feed into the round extraction logic fallback
+                kd_idx = -1
+                for col_idx, col in enumerate(cols):
+                    col_text = col.text.strip()
+                    kd_match = re.search(r'(\d+)\s*-\s*(\d+)', col_text)
+                    if kd_match:
+                        k_check = int(kd_match.group(1))
+                        d_check = int(kd_match.group(2))
+                        if 1 <= k_check <= 50 and 1 <= d_check <= 50:
+                            kd_idx = col_idx
                             break
-            
-            if m_rounds < 10 or m_rounds > 60:
-                m_rounds = 22  # Standard Fallback
 
-            # 2. DATE EXTRACTION
-            date = "N/A"
-            for txt in cell_texts:
-                if re.search(r'^\d{2}/\d{2}/\d{2}$', txt):
-                    date = txt
-                    break
+                # 1. IDENTIFY ROUNDS PLAYED
+                m_rounds = 0
+                parentheses_nums = []
+                for txt in cell_texts:
+                    p_matches = re.findall(r'\((\d+)\)', txt)
+                    for pm in p_matches:
+                        parentheses_nums.append(int(pm))
+                
+                if len(parentheses_nums) >= 2:
+                    m_rounds = parentheses_nums[0] + parentheses_nums[1]
+                    
+                if m_rounds < 10 or m_rounds > 60:
+                    for idx, txt in enumerate(cell_texts):
+                        if idx == kd_idx:
+                            continue
+                        m = re.search(r'^(\d+)\s*-\s*(\d+)$', txt)
+                        if m:
+                            s1 = int(m.group(1))
+                            s2 = int(m.group(2))
+                            if 13 <= (s1 + s2) <= 50:
+                                m_rounds = s1 + s2
+                                break
+                
+                if m_rounds < 10 or m_rounds > 60:
+                    m_rounds = 22  # Standard Fallback
 
-            # 3. OPPONENT EXTRACTION
-            known_maps = {'anc', 'mrg', 'd2', 'inf', 'nuke', 'anb', 'vrt', 'ovp', 'ancient', 'mirage', 'dust2', 'inferno', 'nuke', 'anubis', 'vertigo', 'overpass'}
-            map_cell_idx = -1
-            for idx, txt in enumerate(cell_texts):
-                if txt.lower() in known_maps:
-                    map_cell_idx = idx
-                    break
-                    
-            if map_cell_idx > 0:
-                opp = cell_texts[map_cell_idx - 1].lower()
-            else:
-                opp = cell_texts[2].lower() if len(cell_texts) > 2 else "unknown"
-                
-            opp = re.sub(r'\(.*\)', '', opp).strip()
-            opp = re.sub(r'\s+\d+\s*$', '', opp).strip()
-            
-            # =========================================================
-            # NEW COLUMN-SCANNING K-D EXTRACTION ENGINE
-            # =========================================================
-            kd_found = False
-            for col_idx, col in enumerate(cols):
-                col_text = col.text.strip()
-                kd_match = re.search(r'(\d+)\s*-\s*(\d+)', col_text)
-                
-                if kd_match:
-                    kills = int(kd_match.group(1))
-                    deaths = int(kd_match.group(2))
-                    
-                    # Sanity check: kills should be reasonable
-                    if 1 <= kills <= 50 and 1 <= deaths <= 50:
-                        if len(all_maps) <= 3:
-                            print(f"✓ FOUND K-D in column {col_idx}: {kills}K/{deaths}D from '{col_text}'")
-                        
-                        all_maps.append({
-                            "date": date,
-                            "opponent": opp,
-                            "kills": kills,
-                            "rounds": m_rounds
-                        })
-                        
-                        kd_found = True
+                # 2. DATE EXTRACTION
+                date = "N/A"
+                for txt in cell_texts:
+                    if re.search(r'^\d{2}/\d{2}/\d{2}$', txt):
+                        date = txt
                         break
 
-            if not kd_found and len(all_maps) <= 10:
-                print(f"✗ NO VALID K-D FOUND in any column for row {i}")
-            # =========================================================
+                # 3. OPPONENT EXTRACTION
+                known_maps = {'anc', 'mrg', 'd2', 'inf', 'nuke', 'anb', 'vrt', 'ovp', 'ancient', 'mirage', 'dust2', 'inferno', 'nuke', 'anubis', 'vertigo', 'overpass'}
+                map_cell_idx = -1
+                for idx, txt in enumerate(cell_texts):
+                    if txt.lower() in known_maps:
+                        map_cell_idx = idx
+                        break
+                        
+                if map_cell_idx > 0:
+                    opp = cell_texts[map_cell_idx - 1].lower()
+                else:
+                    opp = cell_texts[2].lower() if len(cell_texts) > 2 else "unknown"
+                    
+                opp = re.sub(r'\(.*\)', '', opp).strip()
+                opp = re.sub(r'\s+\d+\s*$', '', opp).strip()
                 
-        except Exception as e:
-            continue
+                # =========================================================
+                # COLUMN-SCANNING K-D EXTRACTION ENGINE
+                # =========================================================
+                kd_found = False
+                for col_idx, col in enumerate(cols):
+                    col_text = col.text.strip()
+                    kd_match = re.search(r'(\d+)\s*-\s*(\d+)', col_text)
+                    
+                    if kd_match:
+                        kills = int(kd_match.group(1))
+                        deaths = int(kd_match.group(2))
+                        
+                        # Sanity check: kills should be reasonable
+                        if 1 <= kills <= 50 and 1 <= deaths <= 50:
+                            if len(all_maps) <= 3:
+                                print(f"✓ FOUND K-D in column {col_idx}: {kills}K/{deaths}D from '{col_text}'")
+                            
+                            all_maps.append({
+                                "date": date,
+                                "opponent": opp,
+                                "kills": kills,
+                                "rounds": m_rounds
+                            })
+                            
+                            kd_found = True
+                            break
 
-    print(f"TOTAL MAPS FOUND: {len(all_maps)}")
+                if not kd_found and len(all_maps) <= 10:
+                    print(f"✗ NO VALID K-D FOUND in any column for row {i}")
+                # =========================================================
+                    
+            except Exception as e:
+                continue
 
-    if len(all_maps) < 2:
-        return _error_response(f"FAIL: Found {len(all_maps)} maps. Player lacks analytical match history entries.", display, line, opponent)
+        print(f"TOTAL MAPS FOUND: {len(all_maps)}")
 
-    # SEQUENTIAL CONTIGUOUS SERIES GROUPING COHERENCE
-    series_groups = []
-    if all_maps:
-        current_group = [all_maps[0]]
-        for m_data in all_maps[1:]:
-            if m_data['opponent'] == current_group[0]['opponent'] and m_data['date'] == current_group[0]['date']:
-                current_group.append(m_data)
-            else:
+        if len(all_maps) < 2:
+            return _error_response(f"FAIL: Found {len(all_maps)} maps. Player lacks analytical match history entries.", display, line, opponent)
+
+        # SEQUENTIAL CONTIGUOUS SERIES GROUPING COHERENCE
+        series_groups = []
+        if all_maps:
+            current_group = [all_maps[0]]
+            for m_data in all_maps[1:]:
+                if m_data['opponent'] == current_group[0]['opponent'] and m_data['date'] == current_group[0]['date']:
+                    current_group.append(m_data)
+                else:
+                    series_groups.append(current_group)
+                    current_group = [m_data]
+            if current_group:
                 series_groups.append(current_group)
-                current_group = [m_data]
-        if current_group:
-            series_groups.append(current_group)
 
-    final_series_totals = []
-    individual_map_kills = []
-    total_k, total_r = 0, 0
+        final_series_totals = []
+        individual_map_kills = []
+        total_k, total_r = 0, 0
 
-    # Extract Maps 1-2 across the target 10 BO3 matches chronologically
-    for group in series_groups:
-        if len(final_series_totals) >= 10:
-            break
-            
-        if len(group) >= 2:
-            m1_kills = group[-1]["kills"]
-            m2_kills = group[-2]["kills"]
-            
-            individual_map_kills.extend([m1_kills, m2_kills])
-            
-            combined_k = m1_kills + m2_kills
-            combined_r = group[-1]["rounds"] + group[-2]["rounds"]
-            
-            final_series_totals.append(combined_k)
-            total_k += combined_k
-            total_r += combined_r
+        # Extract Maps 1-2 across the target 10 BO3 matches chronologically
+        for group in series_groups:
+            if len(final_series_totals) >= 10:
+                break
+                
+            if len(group) >= 2:
+                m1_kills = group[-1]["kills"]
+                m2_kills = group[-2]["kills"]
+                
+                individual_map_kills.extend([m1_kills, m2_kills])
+                
+                combined_k = m1_kills + m2_kills
+                combined_r = group[-1]["rounds"] + group[-2]["rounds"]
+                
+                final_series_totals.append(combined_k)
+                total_k += combined_k
+                total_r += combined_r
 
-    if not final_series_totals:
-        return _error_response("FAIL: Could not track enough valid multi-map samples from recent matches.", display, line, opponent)
+        if not final_series_totals:
+            return _error_response("FAIL: Could not track enough valid multi-map samples from recent matches.", display, line, opponent)
 
-    avg_2map = round(_stats.mean(final_series_totals), 2)
-    median = _stats.median(final_series_totals)
-    hits = sum(1 for x in final_series_totals if x > line)
-    hit_rate_pct = (hits / len(final_series_totals)) * 100
+        avg_2map = round(_stats.mean(final_series_totals), 2)
+        median = _stats.median(final_series_totals)
+        hits = sum(1 for x in final_series_totals if x > line)
+        hit_rate_pct = (hits / len(final_series_totals)) * 100
 
-    kpr = total_k / total_r if total_r > 0 else 0.68
-    
-    if any(x in opponent.lower() for x in ["vitality", "g2", "faze", "mouz", "navi"]):
-        proj_rounds = 44
-    else:
-        proj_rounds = 42
+        kpr = total_k / total_r if total_r > 0 else 0.68
         
-    expected_kills = round(kpr * proj_rounds, 1)
-    
-    # NEGATIVE BINOMIAL MONTE CARLO MODEL SIMULATION
-    var_2map = _stats.variance(final_series_totals) if len(final_series_totals) > 1 else avg_2map
-    if var_2map <= expected_kills:
-        var_2map = expected_kills * 1.25
+        if any(x in opponent.lower() for x in ["vitality", "g2", "faze", "mouz", "navi"]):
+            proj_rounds = 44
+        else:
+            proj_rounds = 42
+            
+        expected_kills = round(kpr * proj_rounds, 1)
+        if expected_kills <= 0:
+            expected_kills = 0.1
         
-    p_nb = expected_kills / var_2map
-    n_nb = (expected_kills ** 2) / (var_2map - expected_kills)
-    
-    sim = np.random.negative_binomial(n_nb, p_nb, 100000)
-    over_prob = (np.sum(sim > line) / 100000) * 100
-    under_prob = 100.0 - over_prob
-    edge_delta = over_prob - 50.0
-    
-    # CRITERIA STRATEGIC RULES
-    if avg_2map > line and median > line and hit_rate_pct >= 60.0:
-        bet_rec = "OVER"
-    elif avg_2map < line and median < line and hit_rate_pct <= 40.0:
-        bet_rec = "UNDER"
-    else:
-        bet_rec = "NO BET"
+        # NEGATIVE BINOMIAL MONTE CARLO MODEL SIMULATION
+        var_2map = _stats.variance(final_series_totals) if len(final_series_totals) > 1 else avg_2map
+        if var_2map <= expected_kills:
+            var_2map = expected_kills * 1.25
+            
+        p_nb = expected_kills / var_2map
+        n_nb = (expected_kills ** 2) / (var_2map - expected_kills)
         
-    # MISPRICED STRATIFICATION ENGINE
-    if line > 0 and (avg_2map - line) >= 8.0:
-        mispriced = "PROP ERROR (Wildly Underpriced)"
-    elif line > 0 and (line - avg_2map) >= 8.0:
-        mispriced = "PROP ERROR (Wildly Overpriced)"
-    elif abs(avg_2map - line) >= 4.0:
-        mispriced = "YES"
-    else:
-        mispriced = "NO"
+        sim = np.random.negative_binomial(n_nb, p_nb, 100000)
+        over_prob = (np.sum(sim > line) / 100000) * 100
+        under_prob = 100.0 - over_prob
+        edge_delta = over_prob - 50.0
+        
+        # CRITERIA STRATEGIC RULES
+        if avg_2map > line and median > line and hit_rate_pct >= 60.0:
+            bet_rec = "OVER"
+        elif avg_2map < line and median < line and hit_rate_pct <= 40.0:
+            bet_rec = "UNDER"
+        else:
+            bet_rec = "NO BET"
+            
+        # MISPRICED STRATIFICATION ENGINE
+        if line > 0 and (avg_2map - line) >= 8.0:
+            mispriced = "PROP ERROR (Wildly Underpriced)"
+        elif line > 0 and (line - avg_2map) >= 8.0:
+            mispriced = "PROP ERROR (Wildly Overpriced)"
+        elif abs(avg_2map - line) >= 4.0:
+            mispriced = "YES"
+        else:
+            mispriced = "NO"
 
-    # EDGE CALCULATOR AND GRADING SCALE
-    if abs(edge_delta) >= 25.0 and "PROP ERROR" in mispriced:
-        grade_str = "10/10 (Elite Edge / Prop Error)"
-    elif abs(edge_delta) >= 20.0:
-        grade_str = "9/10 (Very Strong Edge)"
-    elif abs(edge_delta) >= 15.0:
-        grade_str = "8/10 (Strong Playable Edge)"
-    elif abs(edge_delta) >= 10.0:
-        grade_str = "7/10 (Solid Lean / Favorable Value)"
-    elif abs(edge_delta) >= 5.0:
-        grade_str = "6/10 (Small Edge / Minor Value)"
-    elif abs(edge_delta) >= 2.0:
-        grade_str = "5/10 (Thin Edge / Borderline)"
-    else:
-        grade_str = "Below 5/10 (No Bet)"
+        # EDGE CALCULATOR AND GRADING SCALE
+        if abs(edge_delta) >= 25.0 and "PROP ERROR" in mispriced:
+            grade_str = "10/10 (Elite Edge / Prop Error)"
+        elif abs(edge_delta) >= 20.0:
+            grade_str = "9/10 (Very Strong Edge)"
+        elif abs(edge_delta) >= 15.0:
+            grade_str = "8/10 (Strong Playable Edge)"
+        elif abs(edge_delta) >= 10.0:
+            grade_str = "7/10 (Solid Lean / Favorable Value)"
+        elif abs(edge_delta) >= 5.0:
+            grade_str = "6/10 (Small Edge / Minor Value)"
+        elif abs(edge_delta) >= 2.0:
+            grade_str = "5/10 (Thin Edge / Borderline)"
+        else:
+            grade_str = "Below 5/10 (No Bet)"
 
-    return {
-        "Player": display,
-        "Match": f"vs {opponent.title()}",
-        "Prop": f"{line} Kills",
-        "Prop Line": f"{line} Kills",
-        "Role": "Star / Entry Rifler",
-        "Recent sample used": f"Last {len(final_series_totals)} BO3 Series (M1+M2)",
-        "Recent average": avg_2map,
-        "Recent median": median,
-        "Hit rate": f"{round(hit_rate_pct, 1)}%",
-        "Projected rounds": proj_rounds,
-        "Expected kills": expected_kills,
-        "Simulated mean": round(np.mean(sim), 2),
-        "Standard deviation": round(_stats.stdev(final_series_totals), 2) if len(final_series_totals) > 1 else 0,
-        "Over probability": f"{round(over_prob, 1)}%",
-        "Under probability": f"{round(under_prob, 1)}%",
-        "Edge vs line": f"{round(edge_delta, 1)}%",
-        "Mispriced or not": mispriced,
-        "Final grade": grade_str,
-        "Bet recommendation": bet_rec,
-        # Multi-mapped variation safety web for the outer Discord calling script
-        "Recent Totals (M1+M2 Combined)": final_series_totals,
-        "Recent Totals (Maps 1-2 Only)": final_series_totals,
-        "Recent Totals": final_series_totals,
-        "recent totals": final_series_totals,
-        "Recent Individual Map Kills": individual_map_kills[:20]
-    }
+        return {
+            "Player": display,
+            "Match": f"vs {opponent.title()}",
+            "Prop": f"{line} Kills",
+            "Prop Line": f"{line} Kills",
+            "Role": "Star / Entry Rifler",
+            "Recent sample used": f"Last {len(final_series_totals)} BO3 Series (M1+M2)",
+            "Recent Sample Used": f"Last {len(final_series_totals)} BO3 Series (M1+M2)",
+            "Recent average": avg_2map,
+            "Recent Average": avg_2map,
+            "Recent median": median,
+            "Recent Median": median,
+            "Hit rate": f"{round(hit_rate_pct, 1)}%",
+            "Hit Rate": f"{round(hit_rate_pct, 1)}%",
+            "Projected rounds": proj_rounds,
+            "Projected Rounds": proj_rounds,
+            "Expected kills": expected_kills,
+            "Expected Kills": expected_kills,
+            "Simulated mean": round(np.mean(sim), 2),
+            "Simulated Mean": round(np.mean(sim), 2),
+            "Standard deviation": round(_stats.stdev(final_series_totals), 2) if len(final_series_totals) > 1 else 0,
+            "Standard Deviation": round(_stats.stdev(final_series_totals), 2) if len(final_series_totals) > 1 else 0,
+            "Over probability": f"{round(over_prob, 1)}%",
+            "Over Probability": f"{round(over_prob, 1)}%",
+            "Under probability": f"{round(under_prob, 1)}%",
+            "Under Probability": f"{round(under_prob, 1)}%",
+            "Edge vs line": f"{round(edge_delta, 1)}%",
+            "Edge vs Line": f"{round(edge_delta, 1)}%",
+            "Mispriced or not": mispriced,
+            "Mispriced or Not": mispriced,
+            "Final grade": grade_str,
+            "Final Grade": grade_str,
+            "Bet recommendation": bet_rec,
+            "Bet Recommendation": bet_rec,
+            # Complete key mirrored aliases for bot layouts
+            "Recent Totals (M1+M2 Combined)": final_series_totals,
+            "Recent Totals (Maps 1-2 Only)": final_series_totals,
+            "Recent Totals": final_series_totals,
+            "recent totals": final_series_totals,
+            "Recent Individual Map Kills": individual_map_kills[:20]
+        }
+    except Exception as global_e:
+        print(f"CRITICAL SYSTEM BLOCK EXCEPTION: {global_e}")
+        return _error_response(f"CRITICAL CRASH PREVENTED: {str(global_e)}", player_name, line, opponent)
