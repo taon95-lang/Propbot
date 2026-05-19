@@ -97,52 +97,54 @@ def search_player(name: str):
     return None
 
 # =========================================================
+# SAFE DICTIONARY FALLBACK FOR ERRORS
+# =========================================================
+def _error_response(msg, player_name, line, opponent):
+    return {
+        "Player": player_name.title(),
+        "Match": f"vs {opponent.title()}",
+        "Prop": f"{line} Kills",
+        "Role": "N/A",
+        "Recent sample used": "None",
+        "Recent average": 0.0,
+        "Recent median": 0.0,
+        "Hit rate": "0%",
+        "Projected rounds": 0,
+        "Expected kills": 0.0,
+        "Simulated mean": 0.0,
+        "Standard deviation": 0.0,
+        "Over probability": "0%",
+        "Under probability": "0%",
+        "Edge vs line": "0%",
+        "Mispriced or not": "NO",
+        "Final grade": "No Bet",
+        "Bet recommendation": "NO BET",
+        "Recent Totals (M1+M2 Combined)": [],
+        "Recent Totals": [],
+        "recent totals": [],
+        "Recent Individual Map Kills": [],
+        "error": msg
+    }
+
+# =========================================================
 # THE PERFECT CONTENT-SCANNING PROCESSING CORE
 # =========================================================
 def get_player_info(player_name, line=0.0, opponent="N/A"):
-    # Standardized failure handler to protect Discord wrappers from uncaught Key/Type Errors
-    def make_error_dictionary(error_msg, p_display=player_name):
-        return {
-            "error": error_msg,
-            "Player": p_display,
-            "Match": f"vs {opponent.title()}",
-            "Prop": f"{line} Kills",
-            "Role": "N/A",
-            "Recent sample used": "N/A",
-            "Recent average": 0,
-            "Recent median": 0,
-            "Hit rate": "0%",
-            "Projected rounds": 0,
-            "Expected kills": 0,
-            "Simulated mean": 0,
-            "Standard deviation": 0,
-            "Over probability": "0%",
-            "Under probability": "0%",
-            "Edge vs line": "0%",
-            "Mispriced or not": "NO",
-            "Final grade": "N/A",
-            "Bet recommendation": "NO BET",
-            "Recent totals": [],
-            "Recent Totals": [],
-            "Recent Totals (M1+M2 Combined)": [],
-            "Recent Individual Map Kills": []
-        }
-
     search_res = search_player(player_name)
     if not search_res: 
-        return make_error_dictionary(f"FAIL: Could not find player '{player_name}' on HLTV.")
+        return _error_response(f"FAIL: Could not find player '{player_name}' on HLTV.", player_name, line, opponent)
     pid, slug, display = search_res
     print(f"TARGET ACQUIRED: {display} (ID: {pid})")
     
     stats_url = f"{HLTV_BASE}/stats/players/matches/{pid}/{slug}"
     html, _ = _fetch(stats_url, render=True)
     if not html: 
-        return make_error_dictionary("FAIL: Stats page blocked or ScraperAPI failed after 3 retries.", display)
+        return _error_response("FAIL: Stats page blocked or ScraperAPI failed after 3 retries.", display, line, opponent)
 
     soup = BeautifulSoup(html, "html.parser")
     table = soup.find("table", {"class": "stats-table"})
     if not table:
-        return make_error_dictionary("FAIL: Stats table layout not found or changed on HLTV.", display)
+        return _error_response("FAIL: Stats table layout not found or changed on HLTV.", display, line, opponent)
     
     rows = table.find("tbody").find_all("tr")
     print(f"PROCESSING {len(rows)} ROWS FROM STATS TABLE...")
@@ -165,7 +167,7 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
                 if kd_match:
                     k_check = int(kd_match.group(1))
                     d_check = int(kd_match.group(2))
-                    if 1 <= k_check <= 50 and 1 <= d_check <= 50 and (k_check > 5 or d_check > 5):
+                    if 1 <= k_check <= 50 and 1 <= d_check <= 50:
                         kd_idx = col_idx
                         break
 
@@ -218,7 +220,9 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
             opp = re.sub(r'\(.*\)', '', opp).strip()
             opp = re.sub(r'\s+\d+\s*$', '', opp).strip()
             
-            # 4. REFINED COLUMN-SCANNING K-D PATTERN MATCHING
+            # =========================================================
+            # NEW COLUMN-SCANNING K-D EXTRACTION ENGINE
+            # =========================================================
             kd_found = False
             for col_idx, col in enumerate(cols):
                 col_text = col.text.strip()
@@ -228,8 +232,8 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
                     kills = int(kd_match.group(1))
                     deaths = int(kd_match.group(2))
                     
-                    # Sanity Check: Must be realistic player kills/deaths, bypassing match score elements (e.g. 2-1)
-                    if 1 <= kills <= 50 and 1 <= deaths <= 50 and (kills > 5 or deaths > 5):
+                    # Sanity check: kills should be reasonable
+                    if 1 <= kills <= 50 and 1 <= deaths <= 50:
                         if len(all_maps) <= 3:
                             print(f"✓ FOUND K-D in column {col_idx}: {kills}K/{deaths}D from '{col_text}'")
                         
@@ -245,6 +249,7 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
 
             if not kd_found and len(all_maps) <= 10:
                 print(f"✗ NO VALID K-D FOUND in any column for row {i}")
+            # =========================================================
                 
         except Exception as e:
             continue
@@ -252,7 +257,7 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
     print(f"TOTAL MAPS FOUND: {len(all_maps)}")
 
     if len(all_maps) < 2:
-        return make_error_dictionary(f"FAIL: Found {len(all_maps)} maps. Player lacks analytical match history entries.", display)
+        return _error_response(f"FAIL: Found {len(all_maps)} maps. Player lacks analytical match history entries.", display, line, opponent)
 
     # SEQUENTIAL CONTIGUOUS SERIES GROUPING COHERENCE
     series_groups = []
@@ -277,7 +282,6 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
             break
             
         if len(group) >= 2:
-            # Table rows run newest-to-oldest. group[-1] is Map 1, group[-2] is Map 2
             m1_kills = group[-1]["kills"]
             m2_kills = group[-2]["kills"]
             
@@ -291,7 +295,7 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
             total_r += combined_r
 
     if not final_series_totals:
-        return make_error_dictionary("FAIL: Could not track enough valid multi-map samples from recent matches.", display)
+        return _error_response("FAIL: Could not track enough valid multi-map samples from recent matches.", display, line, opponent)
 
     avg_2map = round(_stats.mean(final_series_totals), 2)
     median = _stats.median(final_series_totals)
@@ -373,9 +377,9 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
         "Mispriced or not": mispriced,
         "Final grade": grade_str,
         "Bet recommendation": bet_rec,
-        # Multi-Key redundancy layer to completely resolve cross-version Discord naming issues
-        "Recent totals": final_series_totals,
-        "Recent Totals": final_series_totals,
+        # Multiple keys mapped here to ensure compatibility with your layout
         "Recent Totals (M1+M2 Combined)": final_series_totals,
+        "Recent Totals": final_series_totals,
+        "recent totals": final_series_totals,
         "Recent Individual Map Kills": individual_map_kills[:20]
     }
