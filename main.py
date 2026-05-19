@@ -28,7 +28,11 @@ async def scan(ctx, player=None, line=None, opponent="N/A"):
             if isinstance(data, str) and "FAIL" in data:
                 return await msg.edit(content=f"❌ {data}")
 
-            rec = data['Bet recommendation']
+            # Handle error responses
+            if "error" in data:
+                return await msg.edit(content=f"❌ {data.get('error', 'Unknown error occurred')}")
+
+            rec = data.get('Bet recommendation', 'NO BET')
             
             # Explicit statement assignment prevents structural syntax parsing drops
             if "OVER" in rec:
@@ -38,33 +42,46 @@ async def scan(ctx, player=None, line=None, opponent="N/A"):
             else:
                 color = 0x808080
             
-            embed = discord.Embed(title=f"🎯 {data['Player'].upper()} GOLD SCAN", color=color)
+            embed = discord.Embed(title=f"🎯 {data.get('Player', player).upper()} GOLD SCAN", color=color)
             
-            embed.add_field(name="👤 Player", value=data['Player'], inline=True)
-            embed.add_field(name="⚔️ Match", value=data['Match'], inline=True)
-            embed.add_field(name="🎯 Prop Line", value=data['Prop'], inline=True)
+            embed.add_field(name="👤 Player", value=data.get('Player', 'N/A'), inline=True)
+            embed.add_field(name="⚔️ Match", value=data.get('Match', 'N/A'), inline=True)
+            embed.add_field(name="🎯 Prop Line", value=data.get('Prop', f"{line} Kills"), inline=True)
             
-            embed.add_field(name="🎭 Role", value=data['Role'], inline=True)
-            embed.add_field(name="🧪 Recent Sample Used", value=data['Recent sample used'], inline=True)
-            embed.add_field(name="📊 Recent Average", value=data['Recent average'], inline=True)
+            embed.add_field(name="🎭 Role", value=data.get('Role', 'N/A'), inline=True)
+            embed.add_field(name="🧪 Recent Sample Used", value=data.get('Recent sample used', 'N/A'), inline=True)
+            embed.add_field(name="📊 Recent Average", value=data.get('Recent average', 0.0), inline=True)
             
-            embed.add_field(name="📈 Recent Median", value=data['Recent median'], inline=True)
-            embed.add_field(name="🔥 Hit Rate", value=data['Hit rate'], inline=True)
-            embed.add_field(name="⏳ Projected Rounds", value=data['Projected rounds'], inline=True)
+            embed.add_field(name="📈 Recent Median", value=data.get('Recent median', 0.0), inline=True)
+            embed.add_field(name="🔥 Hit Rate", value=data.get('Hit rate', '0.0%'), inline=True)
+            embed.add_field(name="⏳ Projected Rounds", value=data.get('Projected rounds', 0), inline=True)
             
-            embed.add_field(name="🔫 Expected Kills", value=data['Expected kills'], inline=True)
-            embed.add_field(name="🤖 Simulated Mean", value=data['Simulated mean'], inline=True)
-            embed.add_field(name="📉 Standard Deviation", value=data['Standard deviation'], inline=True)
+            embed.add_field(name="🔫 Expected Kills", value=data.get('Expected kills', 0.0), inline=True)
+            embed.add_field(name="🤖 Simulated Mean", value=data.get('Simulated mean', 0.0), inline=True)
+            embed.add_field(name="📉 Standard Deviation", value=data.get('Standard deviation', 0.0), inline=True)
             
-            embed.add_field(name="📈 Over Probability", value=data['Over probability'], inline=True)
-            embed.add_field(name="📉 Under Probability", value=data['Under probability'], inline=True)
-            embed.add_field(name="📐 Edge vs Line", value=data['Edge vs line'], inline=True)
+            embed.add_field(name="📈 Over Probability", value=data.get('Over probability', '0.0%'), inline=True)
+            embed.add_field(name="📉 Under Probability", value=data.get('Under probability', '0.0%'), inline=True)
+            embed.add_field(name="📐 Edge vs Line", value=data.get('Edge vs line', '0.0%'), inline=True)
             
-            embed.add_field(name="⚖️ Mispriced or Not", value=data['Mispriced or not'], inline=True)
-            embed.add_field(name="✅ Final Grade", value=f"**{data['Final grade']}**", inline=True)
+            embed.add_field(name="⚖️ Mispriced or Not", value=data.get('Mispriced or not', 'NO'), inline=True)
+            embed.add_field(name="✅ Final Grade", value=f"**{data.get('Final grade', 'N/A')}**", inline=True)
             embed.add_field(name="💰 Bet Recommendation", value=f"**{rec}**", inline=True)
             
-            embed.add_field(name="📋 Recent Totals (Maps 1-2 Only)", value=f"`{data['Recent totals']}`", inline=False)
+            # ✅ FIXED: Safe fallback chain for Recent Totals
+            recent_totals = (
+                data.get('Recent Totals (M1+M2 Combined)') or
+                data.get('Recent Totals') or
+                data.get('Recent totals') or
+                []
+            )
+            
+            if recent_totals:
+                totals_display = ', '.join(str(x) for x in recent_totals)
+                embed.add_field(name="📋 Recent Totals (Maps 1-2 Only)", value=f"`{totals_display}`", inline=False)
+            else:
+                embed.add_field(name="📋 Recent Totals (Maps 1-2 Only)", value="`No data available`", inline=False)
+            
             embed.set_footer(text="Gold Standard Prediction Engine • 100,000 Monte Carlo Simulation Runs")
 
             await msg.edit(content=None, embed=embed)
