@@ -3,7 +3,7 @@ import os
 import time
 import statistics as _stats
 import functools
-import random
+import numpy as np
 from bs4 import BeautifulSoup
 from collections import defaultdict
 
@@ -98,45 +98,7 @@ def search_player(name: str):
     return None
 
 # =========================================================
-# ADAPTIVE TABLE PARSER - HANDLES CURRENT HLTV FORMAT
-# =========================================================
-def _parse_stats_table(soup):
-    """Dynamically identifies column positions instead of hardcoding indices"""
-    table = soup.find("table", {"class": "stats-table"})
-    if not table:
-        return None
-    
-    # Find header row to identify column positions
-    thead = table.find("thead")
-    if thead:
-        headers = [th.text.strip().lower() for th in thead.find_all("th")]
-        print(f"DETECTED COLUMNS: {headers}")
-        
-        # Map column names to indices - UPDATED TO HANDLE CURRENT HLTV FORMAT
-        date_idx = next((i for i, h in enumerate(headers) if "date" in h), 0)
-        opp_idx = next((i for i, h in enumerate(headers) if "opponent" in h), 2)
-        
-        # Handle both "result" and separate t1/t2 columns
-        if any("t1" in h for h in headers):
-            # New format with separate t1/t2 columns
-            t1_idx = next((i for i, h in enumerate(headers) if h == "t1"), 3)
-            t2_idx = next((i for i, h in enumerate(headers) if h == "t2"), 4)
-            result_idx = (t1_idx, t2_idx)  # Store as tuple
-        else:
-            result_idx = next((i for i, h in enumerate(headers) if "result" in h), 5)
-        
-        kd_idx = next((i for i, h in enumerate(headers) if "k - d" in h or "k-d" in h), 6)
-        
-        print(f"INDICES: date={date_idx}, opp={opp_idx}, result={result_idx}, kd={kd_idx}")
-    else:
-        # Fallback to original indices if no header found
-        date_idx, opp_idx, result_idx, kd_idx = 0, 2, (3, 4), 6
-        print(f"NO HEADER FOUND - Using fallback indices")
-    
-    return table, date_idx, opp_idx, result_idx, kd_idx
-
-# =========================================================
-# THE PERFECT NO-GUESSWORK DIRECT INDEX ENGINE
+# THE PERFECT NO-GUESSWORK CONTENT-SCANNING ENGINE
 # =========================================================
 def get_player_info(player_name, line=0.0, opponent="N/A"):
     search_res = search_player(player_name)
@@ -148,88 +110,83 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
     stats_url = f"{HLTV_BASE}/stats/players/matches/{pid}/{slug}"
     html, _ = _fetch(stats_url, render=True)
     if not html: 
-        return "FAIL: Stats page blocked or ScraperAPI failed after 3 retries. Check SCRAPERAPI_KEY and credits."
+        return "FAIL: Stats page blocked or ScraperAPI failed after 3 retries."
 
     soup = BeautifulSoup(html, "html.parser")
-    
-    # Use adaptive parser instead of hardcoded indices
-    parse_result = _parse_stats_table(soup)
-    if not parse_result:
+    table = soup.find("table", {"class": "stats-table"})
+    if not table:
         return "FAIL: Stats table layout not found or changed on HLTV."
     
-    table, date_idx, opp_idx, result_idx, kd_idx = parse_result
-
     rows = table.find("tbody").find_all("tr")
-    
     print(f"PROCESSING {len(rows)} ROWS FROM STATS TABLE...")
 
-    # Track all maps regardless of series grouping first
     all_maps = []
 
     for i, row in enumerate(rows):
         cols = row.find_all("td")
-        if len(cols) < 7:  # Need at least 7 columns
+        if len(cols) < 5:
             continue
         
         try:
-            date = cols[date_idx].text.strip()
-            opp = cols[opp_idx].text.strip().lower()
+            cell_texts = [c.text.strip() for c in cols]
             
-            # DIAGNOSTIC: Print ALL column data for first 3 rows
-            if i < 3:
-                print(f"\n=== ROW {i} FULL DATA ===")
-                for idx, col in enumerate(cols):
-                    print(f"  Column {idx}: '{col.text.strip()}'")
-            
-            # Handle result extraction - supports both tuple (t1, t2) and single result column
-            if isinstance(result_idx, tuple):
-                t1_text = cols[result_idx[0]].text.strip()
-                t2_text = cols[result_idx[1]].text.strip()
-                t1_nums = re.findall(r'\d+', t1_text)
-                t2_nums = re.findall(r'\d+', t2_text)
-                if t1_nums and t2_nums:
-                    m_rounds = int(t1_nums[0]) + int(t2_nums[0])
-                else:
-                    continue
-            else:
-                res_text = cols[result_idx].text.strip()
-                res_nums = re.findall(r'\d+', res_text)
-                if len(res_nums) >= 2:
-                    m_rounds = int(res_nums[0]) + int(res_nums[1])
-                else:
-                    continue
-            
-            # SCAN ALL COLUMNS FOR K-D PATTERN
-            kd_found = False
-            for col_idx, col in enumerate(cols):
-                col_text = col.text.strip()
-                kd_match = re.search(r'(\d+)\s*-\s*(\d+)', col_text)
+            # 1. Content-based Date Extraction
+            date = "N/A"
+            for txt in cell_texts:
+                if re.search(r'^\d{2}/\d{2}/\d{2}$', txt):
+                    date = txt
+                    break
+            if date == "N/A":
+                date = cell_texts[0]
                 
-                if kd_match:
-                    kills = int(kd_match.group(1))
-                    deaths = int(kd_match.group(2))
-                    
-                    # Sanity check: kills should be reasonable
-                    if 1 <= kills <= 50 and 1 <= deaths <= 50:
-                        if len(all_maps) <= 3:
-                            print(f"✓ FOUND K-D in column {col_idx}: {kills}K/{deaths}D from '{col_text}'")
-                        
-                        all_maps.append({
-                            "date": date,
-                            "opponent": opp,
-                            "kills": kills,
-                            "rounds": m_rounds
-                        })
-                        
-                        kd_found = True
-                        break
+            # 2. Map & Opponent Detection via Map Names
+            known_maps = {'anc', 'mrg', 'd2', 'inf', 'nuke', 'anb', 'vrt', 'ovp', 'ancient', 'mirage', 'dust2', 'inferno', 'nuke', 'anubis', 'vertigo', 'overpass'}
+            map_idx = -1
+            for idx, txt in enumerate(cell_texts):
+                if txt.lower() in known_maps:
+                    map_idx = idx
+                    break
+            
+            if map_idx != -1 and map_idx > 0:
+                opp = cell_texts[map_idx - 1].lower()
+            else:
+                opp = cell_texts[2].lower() if len(cell_texts) > 2 else "unknown"
+                
+            # Strip trailing tournament match-score indicators, e.g., "astral (2)" -> "astral"
+            opp = re.sub(r'\s*\(\d+\)\s*', '', opp).strip()
 
-            if not kd_found and len(all_maps) <= 10:
-                print(f"✗ NO VALID K-D FOUND in any column for row {i}")
+            # 3. Scan all columns for strict numerical hyphen formats (X - Y)
+            hyphen_patterns = []
+            for txt in cell_texts:
+                m = re.search(r'^\s*(\d+)\s*-\s*(\d+)\s*$', txt)
+                if m:
+                    hyphen_patterns.append((int(m.group(1)), int(m.group(2))))
+            
+            # An authentic match row must contain at least Map Score and Player K-D
+            if len(hyphen_patterns) < 2:
+                continue
+                
+            map_score = hyphen_patterns[0]
+            player_kd = hyphen_patterns[1]
+            
+            m_rounds = map_score[0] + map_score[1]
+            kills = player_kd[0]
+            
+            # Final sanity validation filter
+            if kills < 1 or kills > 50:
+                continue
+                
+            all_maps.append({
+                "date": date,
+                "opponent": opp,
+                "kills": kills,
+                "rounds": m_rounds
+            })
+            
+            if len(all_maps) <= 3:
+                print(f"✓ PARSED MAP {len(all_maps)}: {date} vs {opp} -> {kills}K in {m_rounds}R")
                 
         except Exception as e:
-            if i < 3:
-                print(f"ROW ERROR: {e}")
             continue
 
     print(f"TOTAL MAPS FOUND: {len(all_maps)}")
@@ -237,7 +194,7 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
     if len(all_maps) < 2:
         return f"FAIL: Only found {len(all_maps)} maps. Player may not have recent match data on HLTV."
 
-    # SMARTER SERIES GROUPING
+    # CHRONOLOGICAL SERIES GROUPING (MAPS 1-2 ONLY)
     series_dict = defaultdict(list)
     for map_data in all_maps:
         key = f"{map_data['date']}_{map_data['opponent']}"
@@ -246,23 +203,19 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
     series_groups = []
     for key, maps in series_dict.items():
         if len(maps) >= 2:
-            series_groups.append(maps[:2])
+            # Table rows go from newest to oldest. Map 1 is at the end of the list.
+            # maps[-2:] extracts exactly Map 2 and Map 1 chronologically, completely bypassing Map 3.
+            series_groups.append(maps[-2:])
 
     print(f"FOUND {len(series_groups)} MULTI-MAP SERIES")
 
     if not series_groups:
-        print("NO MULTI-MAP SERIES FOUND - FALLING BACK TO BO1 DATA")
-        for i in range(0, len(all_maps) - 1, 2):
-            if len(series_groups) >= 10:
-                break
-            series_groups.append([all_maps[i], all_maps[i + 1]])
-        
-        if not series_groups:
-            return f"FAIL: Found {len(all_maps)} maps but insufficient data to create samples."
+        return f"FAIL: Could not create valid 2-map samples from data window."
 
     final_series_totals = []
     total_k, total_r = 0, 0
 
+    # Limit exactly to the last 10 BO3 Series (Totaling 20 Maps)
     for group in series_groups[:10]:
         if len(group) >= 2:
             combined_k = group[0]["kills"] + group[1]["kills"]
@@ -271,13 +224,10 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
             total_k += combined_k
             total_r += combined_r
 
-    if not final_series_totals:
-        return f"FAIL: Could not create valid 2-map samples from {len(all_maps)} maps found."
-
-    print(f"FINAL SAMPLE: {len(final_series_totals)} series (Maps 1-2 combined)")
+    print(f"FINAL SAMPLE: {len(final_series_totals)} series (20 maps max total)")
     print(f"RECENT TOTALS: {final_series_totals}")
 
-    kpr = total_k / total_r if total_r > 0 else 0.80
+    kpr = total_k / total_r if total_r > 0 else 0.67
     
     if any(x in opponent.lower() for x in ["vitality", "g2", "faze", "mouz", "navi"]):
         proj_rounds = 44
@@ -286,26 +236,43 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
         
     expected_kills = round(kpr * proj_rounds, 1)
     
-    import numpy as np
-    sim = np.random.poisson(expected_kills, 100000)
+    # ADVANCED NEGATIVE BINOMIAL MONTE CARLO SIMULATION (100,000 RUNS)
+    avg_2map = round(_stats.mean(final_series_totals), 2)
+    var_2map = _stats.variance(final_series_totals) if len(final_series_totals) > 1 else avg_2map
+    
+    # Enforce overdispersion properties to track high volatility/ceilings safely
+    if var_2map <= expected_kills:
+        var_2map = expected_kills * 1.2 
+        
+    p_nb = expected_kills / var_2map
+    n_nb = (expected_kills ** 2) / (var_2map - expected_kills)
+    
+    sim = np.random.negative_binomial(n_nb, p_nb, 100000)
+    
     over_prob = (np.sum(sim > line) / 100000) * 100
     under_prob = 100.0 - over_prob
     edge_delta = over_prob - 50.0
     
-    avg_2map = round(_stats.mean(final_series_totals), 2)
     median = _stats.median(final_series_totals)
+    pct_25 = int(np.percentile(sim, 25))
+    pct_75 = int(np.percentile(sim, 75))
     hits = sum(1 for x in final_series_totals if x > line)
     hit_rate_pct = (hits / len(final_series_totals)) * 100
     
-    if over_prob > 60:
+    # GOLD STANDARD DECISION RULES
+    if avg_2map > line and median > line and hit_rate_pct >= 60.0:
         bet_rec = "OVER"
-    elif over_prob < 40:
+    elif avg_2map < line and median < line and hit_rate_pct <= 40.0:
         bet_rec = "UNDER"
     else:
         bet_rec = "NO BET"
         
-    if abs(edge_delta) >= 10.0:
-        mispriced = "YES"
+    if line > 0 and (avg_2map - line) >= 8.0:
+        mispriced = "PROP ERROR (Wildly Underpriced)"
+    elif line > 0 and (line - avg_2map) >= 8.0:
+        mispriced = "PROP ERROR (Wildly Overpriced)"
+    elif abs(avg_2map - line) >= 4.0:
+        mispriced = "YES (Mispriced Prop)"
     else:
         mispriced = "NO"
     
@@ -322,6 +289,8 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
         "Expected kills": expected_kills,
         "Simulated mean": round(np.mean(sim), 2),
         "Standard deviation": round(_stats.stdev(final_series_totals), 2) if len(final_series_totals) > 1 else 0,
+        "25th percentile": pct_25,
+        "75th percentile": pct_75,
         "Over probability": f"{round(over_prob, 1)}%",
         "Under probability": f"{round(under_prob, 1)}%",
         "Edge vs line": f"{round(edge_delta, 1)}%",
