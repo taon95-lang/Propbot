@@ -129,49 +129,19 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
         try:
             cell_texts = [c.text.strip() for c in cols]
             
-            # 1. MATHEMATICAL DIFFERENTIAL RULE FOR K-D LOCATION
-            kd_info = None
-            for idx, txt in enumerate(cell_texts):
-                m = re.search(r'^(\d+)\s*-\s*(\d+)$', txt)
-                if m:
-                    k_val = int(m.group(1))
-                    d_val = int(m.group(2))
-                    diff_val = k_val - d_val
-                    
-                    is_kd = False
-                    for j, t in enumerate(cell_texts):
-                        if j == idx:
-                            continue
-                        if t == f"{diff_val}" or t == f"+{diff_val}" or (diff_val == 0 and t == "0"):
-                            is_kd = True
-                            break
-                    
-                    if not is_kd and 0 <= k_val <= 60 and 0 <= d_val <= 60:
-                        for t in cell_texts:
-                            if re.search(r'^[0-2]\.\d{2}$', t):
-                                is_kd = True
-                                break
-                                
-                    if is_kd:
-                        kd_info = (k_val, d_val, idx)
+            # Pre-scan for K-D index to safely feed into the round extraction logic fallback
+            kd_idx = -1
+            for col_idx, col in enumerate(cols):
+                col_text = col.text.strip()
+                kd_match = re.search(r'(\d+)\s*-\s*(\d+)', col_text)
+                if kd_match:
+                    k_check = int(kd_match.group(1))
+                    d_check = int(kd_match.group(2))
+                    if 1 <= k_check <= 50 and 1 <= d_check <= 50:
+                        kd_idx = col_idx
                         break
-            
-            if not kd_info:
-                for idx, txt in enumerate(cell_texts):
-                    m = re.search(r'^(\d+)\s*-\s*(\d+)$', txt)
-                    if m:
-                        k_val = int(m.group(1))
-                        if 1 <= k_val <= 50:
-                            kd_info = (k_val, int(m.group(2)), idx)
-                            break
-                            
-            if not kd_info:
-                continue
-                
-            kills = kd_info[0]
-            kd_idx = kd_info[2]
-            
-            # 2. IDENTIFY ROUNDS PLAYED
+
+            # 1. IDENTIFY ROUNDS PLAYED
             m_rounds = 0
             parentheses_nums = []
             for txt in cell_texts:
@@ -197,14 +167,14 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
             if m_rounds < 10 or m_rounds > 60:
                 m_rounds = 22  # Standard Fallback
 
-            # 3. DATE EXTRACTION
+            # 2. DATE EXTRACTION
             date = "N/A"
             for txt in cell_texts:
                 if re.search(r'^\d{2}/\d{2}/\d{2}$', txt):
                     date = txt
                     break
 
-            # 4. OPPONENT EXTRACTION
+            # 3. OPPONENT EXTRACTION
             known_maps = {'anc', 'mrg', 'd2', 'inf', 'nuke', 'anb', 'vrt', 'ovp', 'ancient', 'mirage', 'dust2', 'inferno', 'nuke', 'anubis', 'vertigo', 'overpass'}
             map_cell_idx = -1
             for idx, txt in enumerate(cell_texts):
@@ -220,12 +190,37 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
             opp = re.sub(r'\(.*\)', '', opp).strip()
             opp = re.sub(r'\s+\d+\s*$', '', opp).strip()
             
-            all_maps.append({
-                "date": date,
-                "opponent": opp,
-                "kills": kills,
-                "rounds": m_rounds
-            })
+            # =========================================================
+            # NEW COLUMN-SCANNING K-D EXTRACTION ENGINE
+            # =========================================================
+            # SCAN ALL COLUMNS FOR K-D PATTERN
+            kd_found = False
+            for col_idx, col in enumerate(cols):
+                col_text = col.text.strip()
+                kd_match = re.search(r'(\d+)\s*-\s*(\d+)', col_text)
+                
+                if kd_match:
+                    kills = int(kd_match.group(1))
+                    deaths = int(kd_match.group(2))
+                    
+                    # Sanity check: kills should be reasonable
+                    if 1 <= kills <= 50 and 1 <= deaths <= 50:
+                        if len(all_maps) <= 3:
+                            print(f"✓ FOUND K-D in column {col_idx}: {kills}K/{deaths}D from '{col_text}'")
+                        
+                        all_maps.append({
+                            "date": date,
+                            "opponent": opp,
+                            "kills": kills,
+                            "rounds": m_rounds
+                        })
+                        
+                        kd_found = True
+                        break
+
+            if not kd_found and len(all_maps) <= 10:
+                print(f"✗ NO VALID K-D FOUND in any column for row {i}")
+            # =========================================================
                 
         except Exception as e:
             continue
