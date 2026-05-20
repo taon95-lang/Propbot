@@ -2,7 +2,6 @@ import os
 import discord
 import asyncio
 from discord.ext import commands
-from scraper_with_hs import get_player_info
 import statistics as _stats
 
 intents = discord.Intents.default()
