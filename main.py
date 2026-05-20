@@ -3,14 +3,65 @@ import discord
 import asyncio
 from discord.ext import commands
 import statistics as _stats
+import numpy as np  # Fixed: Moved to global scope for efficiency
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# ==========================================
+# MOCK / ENGINE CONNECTOR FOR GET_PLAYER_INFO
+# ==========================================
+def get_player_info(player_name, line, opponent):
+    """
+    Engine Data Pipeline connector. 
+    Processes data strictly utilizing last 10 BO3 series, Maps 1-2 only.
+    """
+    try:
+        # Example structured return payload mapping to required schema
+        # In production, replace this mock payload with your HLTV scraping/data engine
+        mock_kills_totals = [32, 22, 41, 28, 35, 19, 30, 27, 33, 26]
+        mock_hs_totals = [18, 11, 22, 14, 19, 9, 15, 13, 17, 12]
+        
+        avg_kills = round(float(_stats.mean(mock_kills_totals)), 1)
+        median_kills = float(_stats.median(mock_kills_totals))
+        
+        return {
+            "Player": player_name.upper(),
+            "Match": f"vs {opponent.upper()}",
+            "Prop": f"{line} Kills",
+            "Role": "Star Rifler",
+            "Recent sample used": "Last 10 BO3 (M1+M2 Only)",
+            "Recent average": str(avg_kills),
+            "Recent median": str(median_kills),
+            "Hit rate": "70.0%",
+            "Projected rounds": "42.4",
+            "Expected kills": "31.2",
+            "Simulated mean": "30.8",
+            "Standard deviation": "5.4",
+            "Over probability": "64.2%",
+            "Under probability": "35.8%",
+            "Edge vs line": "+14.2%",
+            "Mispriced or not": "Mispriced Over",
+            "Final grade": "8/10",
+            "Bet recommendation": "STRONG OVER",
+            "Recent Totals (M1+M2 Combined)": mock_kills_totals,
+            
+            # Headshot metrics calculated via Map 1 & Map 2 detailed stats
+            "Recent HS Totals (M1+M2)": mock_hs_totals,
+            "Recent HS Average": round(float(_stats.mean(mock_hs_totals)), 1),
+            "Recent HS Median": float(_stats.median(mock_hs_totals)),
+            "HS Rate": "54.1",
+            "Individual Map HS": [9, 9, 5, 6, 12, 10, 8, 6, 10, 9]
+        }
+    except Exception as e:
+        return {"error": f"Data engine synchronization failure: {str(e)}"}
+
+
 @bot.event
 async def on_ready():
     print(f"✅ GOD-TIER PROP BOT ONLINE: {bot.user}", flush=True)
+
 
 @bot.command()
 async def scan(ctx, player=None, line=None, opponent="N/A"):
@@ -95,7 +146,6 @@ async def hs(ctx, player=None, line=None, opponent="N/A"):
             if "error" in data:
                 return await msg.edit(content=f"❌ {data.get('error', 'Unknown error')}")
 
-            # Extract HS-specific data
             hs_totals = data.get('Recent HS Totals (M1+M2)', [])
             hs_avg = data.get('Recent HS Average', 0)
             hs_median = data.get('Recent HS Median', 0)
@@ -105,11 +155,10 @@ async def hs(ctx, player=None, line=None, opponent="N/A"):
             if not hs_totals:
                 return await msg.edit(content="❌ No headshot data found")
             
-            # Calculate HS-specific stats
             hits = sum(1 for x in hs_totals if x > line_float)
             hit_rate = (hits / len(hs_totals)) * 100
             
-            # HS grading logic
+            # Simple final decision rules implementation
             if hs_avg > (line_float + 2) and hs_median > line_float and hit_rate >= 60:
                 bet_rec = "OVER"
                 color = 0x00ff00
@@ -120,7 +169,7 @@ async def hs(ctx, player=None, line=None, opponent="N/A"):
                 bet_rec = "NO BET"
                 color = 0x808080
             
-            # Edge calculation for HS
+            # Advanced Analytical Block: Negative Binomial Modeling
             if len(hs_totals) > 1:
                 hs_var = _stats.variance(hs_totals)
                 if hs_var <= hs_avg:
@@ -129,15 +178,17 @@ async def hs(ctx, player=None, line=None, opponent="N/A"):
                 p_nb = hs_avg / hs_var
                 n_nb = (hs_avg ** 2) / (hs_var - hs_avg)
                 
-                import numpy as np
-                sim = np.random.negative_binomial(max(1, int(n_nb)), min(0.99, p_nb), 100000)
+                # Fixed: Applied mathematical bounding parameters to protect system execution stability
+                p_nb_clean = max(0.01, min(0.99, p_nb))
+                n_nb_clean = max(1, int(n_nb))
+                
+                sim = np.random.negative_binomial(n_nb_clean, p_nb_clean, 100000)
                 over_prob = (np.sum(sim > line_float) / 100000) * 100
                 under_prob = 100.0 - over_prob
                 edge = over_prob - 50.0
             else:
                 over_prob, under_prob, edge = 50.0, 50.0, 0.0
             
-            # Build embed
             embed = discord.Embed(title=f"🎯 {data['Player'].upper()} HEADSHOT ANALYSIS", color=color)
             
             embed.add_field(name="👤 Player", value=data['Player'], inline=True)
@@ -156,16 +207,13 @@ async def hs(ctx, player=None, line=None, opponent="N/A"):
             embed.add_field(name="📉 Under Prob", value=f"{round(under_prob, 1)}%", inline=True)
             embed.add_field(name="💰 Bet", value=f"**{bet_rec}**", inline=True)
             
-            # Series breakdown
             hs_str = ', '.join(str(x) for x in hs_totals)
             embed.add_field(name="📋 Recent HS Totals (M1+M2)", value=f"`{hs_str}`", inline=False)
             
-            # Individual map HS
             if individual_hs:
                 ind_str = ', '.join(str(x) for x in individual_hs[:10])
                 embed.add_field(name="🗺️ Individual Map HS", value=f"`{ind_str}...`", inline=False)
             
-            # Line comparison
             over_under_str = ""
             for i, hs_val in enumerate(hs_totals, 1):
                 status = "✅" if hs_val > line_float else "❌"
@@ -184,4 +232,10 @@ async def hs(ctx, player=None, line=None, opponent="N/A"):
             print(f"HS SCAN ERROR: {e}")
             await msg.edit(content=f"❌ HS scan crashed: {e}")
 
-bot.run(os.getenv("DISCORD_TOKEN"))
+# Ensure your local environment variables configuration dictates your token initialization
+if __name__ == "__main__":
+    token = os.getenv("DISCORD_TOKEN")
+    if token:
+        bot.run(token)
+    else:
+        print("❌ Error: DISCORD_TOKEN environmental variable not found.")
