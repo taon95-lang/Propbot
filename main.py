@@ -6,7 +6,7 @@ import statistics as _stats
 import numpy as np
 
 # Import the real scraper
-from hltv_scraper import get_player_info
+from scraper import get_player_info
 
 intents = discord.Intents.default()
 intents.message_content = True
