@@ -43,30 +43,56 @@ async def scan(ctx, player=None, line=None, opponent="N/A"):
             else:
                 color = 0x808080
 
+            # Safe variable extraction matching scraper.py dict keys exactly
+            p_name = str(data.get('Player', 'Unknown'))
+            p_prop_line = str(data.get('Prop Line', data.get('Prop', f"{line} Kills")))
+            p_grade = str(data.get('Final grade', 'N/A'))
+            p_mispriced = str(data.get('Mispriced or not', 'N/A'))
+            
+            p_avg = str(data.get('Recent average', 'N/A'))
+            p_median = str(data.get('Recent median', 'N/A'))
+            p_hitrate = str(data.get('Hit rate', 'N/A'))
+            p_rounds = str(data.get('Projected rounds', 'N/A'))
+            p_role = str(data.get('Role', 'N/A'))
+            
+            s_mean = str(data.get('Simulated mean', 'N/A'))
+            s_std = str(data.get('Standard deviation', 'N/A'))
+            s_over = str(data.get('Over probability', 'N/A'))
+            s_under = str(data.get('Under probability', 'N/A'))
+            s_edge = str(data.get('Edge vs line', 'N/A'))
+            s_expected = str(data.get('Expected kills', 'N/A'))
+            
+            p_floor = str(data.get('Floor (Bottom 3 avg)', 'N/A'))
+            p_ceil = str(data.get('Ceiling (Top 3 avg)', 'N/A'))
+            
+            p_kpr = str(data.get('KPR', 'N/A'))
+            p_adr = str(data.get('ADR', 'N/A'))
+            p_hs = str(data.get('HS %', 'N/A'))  # Fixed: Matches 'HS %' from scraper.py
+
             # --- BUILD ADVANCED RAW MARKDOWN TEXT FOR DESCRIPTION ---
             desc_lines = [
-                f"**PLAYER:** {data['Player']} vs. {opponent.upper()}",
-                f"**MATCH:** Maps 1–2 Kills | **PROP LINE:** {data['Prop Line']}",
+                f"**PLAYER:** {p_name} vs. {opponent.upper()}",
+                f"**MATCH:** Maps 1–2 Kills | **PROP LINE:** {p_prop_line}",
                 "----------------------------------------------------------------",
-                f"**GRADE:** {data['Final grade']}",
-                f"**PROJECTION:** ⏸️ **{rec}** ({data['Mispriced or not']})",
+                f"**GRADE:** {p_grade}",
+                f"**PROJECTION:** ⏸️ **{rec}** ({p_mispriced})",
                 "----------------------------------------------------------------",
                 "",
                 "### 📊 CORE METRICS",
-                f"• **Recent Avg (Last 10):** {data['Recent average']}",
-                f"• **Recent Median:** {data['Recent median']}",
-                f"• **Hit Rate:** {data['Hit rate']}",
-                f"• **Projected Rounds:** {data['Projected rounds']}",
-                f"• **Role:** {data.get('Role', 'N/A')}",
+                f"• **Recent Avg (Last 10):** {p_avg}",
+                f"• **Recent Median:** {p_median}",
+                f"• **Hit Rate:** {p_hitrate}",
+                f"• **Projected Rounds:** {p_rounds}",
+                f"• **Role:** {p_role}",
                 "",
                 "### 📈 PROJECTION (EMPIRICAL MODEL)",
-                f"• **Simulated Mean:** {data.get('Simulated mean', 'N/A')}  |  **σ:** {data.get('Standard deviation', 'N/A')}",
-                f"• **Over Probability:** {data['Over probability']}",
-                f"• **Under Probability:** {data['Under probability']}",
-                f"• **Edge vs. Line:** {data['Edge vs line']}",
-                f"• **Expected Kills:** {data['Expected kills']}",
-                f"• **Historical Ceiling/Floor:** {data.get('Floor (Bottom 3 avg)', 'N/A')}–{data.get('Ceiling (Top 3 avg)', 'N/A')}",
-                f"• **Combat Stats:** KPR: {data.get('KPR', 'N/A')} | ADR: {data.get('ADR', 'N/A')} | HS%: {data.get('HS', 0)}%",
+                f"• **Simulated Mean:** {s_mean}  |  **σ:** {s_std}",
+                f"• **Over Probability:** {s_over}",
+                f"• **Under Probability:** {s_under}",
+                f"• **Edge vs. Line:** {s_edge}",
+                f"• **Expected Kills:** {s_expected}",
+                f"• **Historical Ceiling/Floor:** {p_floor}–{p_ceil}",
+                f"• **Combat Stats:** KPR: {p_kpr} | ADR: {p_adr} | HS%: {p_hs}%",
                 ""
             ]
 
@@ -75,7 +101,7 @@ async def scan(ctx, player=None, line=None, opponent="N/A"):
             if map_avgs:
                 desc_lines.append("### 🗺️ MAP INTELLIGENCE")
                 for m, stats in list(map_avgs.items())[:4]:
-                    desc_lines.append(f"• **{m.title()}:** {stats['avg_kills']}k avg ({stats['avg_kpr']} KPR)")
+                    desc_lines.append(f"• **{m.title()}:** {stats.get('avg_kills', 'N/A')}k avg ({stats.get('avg_kpr', 'N/A')} KPR)")
                 desc_lines.append("")
 
             # Add Match History Log Array
@@ -84,7 +110,7 @@ async def scan(ctx, player=None, line=None, opponent="N/A"):
                 desc_lines.append("### 📋 SERIES BREAKDOWN")
                 over_under_history = ""
                 for idx, val in enumerate(totals, 1):
-                    status_emoji = "✅" if val > line_float else "❌"
+                    status_emoji = "✅" if float(val) > line_float else "❌"
                     over_under_history += f"S{idx}: **{val}** {status_emoji}  "
                 desc_lines.append(over_under_history)
                 desc_lines.append("")
@@ -92,7 +118,7 @@ async def scan(ctx, player=None, line=None, opponent="N/A"):
             # Append the narrative generator summary
             if 'Analysis' in data:
                 desc_lines.append("### 🔍 ANALYSIS")
-                desc_lines.append(data['Analysis'])
+                desc_lines.append(str(data['Analysis']))
 
             # Render single clean master block
             embed = discord.Embed(
@@ -167,9 +193,12 @@ async def hs(ctx, player=None, line=None, opponent="N/A"):
             else:
                 over_prob, under_prob, edge = 50.0, 50.0, 0.0
 
+            # Safe string conversions for headshots template
+            p_name = str(data.get('Player', player.title()))
+
             # --- BUILD ADVANCED RAW MARKDOWN TEXT FOR HEADSHOTS ---
             hs_lines = [
-                f"**PLAYER:** {data['Player']} vs. {opponent.upper()}",
+                f"**PLAYER:** {p_name} vs. {opponent.upper()}",
                 f"**MATCH:** Maps 1–2 Headshots | **PROP LINE:** {line} HS",
                 "----------------------------------------------------------------",
                 f"**PROJECTION:** 🎯 **{bet_rec}**",
@@ -196,7 +225,7 @@ async def hs(ctx, player=None, line=None, opponent="N/A"):
             hs_lines.append(over_under_str)
             hs_lines.append("")
 
-            if list(individual_hs):
+            if individual_hs:
                 hs_lines.append("🗺️ **Map-by-Map Raw Splits (Last 10):**")
                 ind_str = ', '.join(str(x) for x in individual_hs[:10])
                 hs_lines.append(f"`{ind_str}...`")
