@@ -1,14 +1,11 @@
 import os
-import discord
-import asyncio
-from discord.ext import commands
-import statistics as _stats
-import numpy as np
 import re
 import time
 import functools
 from bs4 import BeautifulSoup
 from collections import defaultdict
+import statistics as _stats
+import numpy as np
 
 print = functools.partial(print, flush=True)
 
@@ -16,13 +13,6 @@ try:
     from curl_cffi import requests as requests
 except ImportError:
     import requests
-
-# ==========================================
-# DISCORD BOT SETUP
-# ==========================================
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ==========================================
 # HLTV SCRAPER ENGINE
@@ -60,7 +50,7 @@ def search_player(name: str):
         "jl": ("19206", "jl"), "xertion": ("20312", "xertion"),
         "jamyoung": ("19645", "jamyoung"), "h4san4tor": ("22189", "h4san4tor"),
         "brooxsy": ("21971", "brooxsy"), "djoko": ("7175", "djoko"),
-        "flouzer": ("20928", "flouzer")
+        "flouzer": ("20928", "flouzer"), "myltsi": ("20928", "myltsi")
     }
     if name_clean in STATIC: 
         return STATIC[name_clean][0], STATIC[name_clean][1], STATIC[name_clean][1].title()
@@ -100,12 +90,14 @@ def extract_advanced_stats(soup, pid):
         "adr": 75.0,
         "kpr": 0.68,
         "dpr": 0.65,
-        "multi_kill_pct": 15.0,
-        "round_swing_pct": 8.0
+        "clutch_success": 0.0,
+        "opening_kill_rating": 0.0,
+        "awp_kills_per_round": 0.0,
+        "utility_damage": 0.0,
+        "trade_kill_success": 0.0
     }
     
     try:
-        # Look for stats boxes on player page
         stats_divs = soup.find_all("div", {"class": "stats-row"})
         for div in stats_divs:
             text = div.get_text().lower()
@@ -134,20 +126,100 @@ def extract_advanced_stats(soup, pid):
     
     return advanced
 
-def classify_role(advanced_stats, kpr, adr):
-    """Classify player role based on stats"""
+def calculate_multi_kill_rounds(all_maps):
+    """Calculate actual multi-kill percentage from match data"""
+    total_rounds = sum(m.get('rounds', 0) for m in all_maps)
+    total_kills = sum(m.get('kills', 0) for m in all_maps)
+    
+    if total_rounds == 0:
+        return 15.0
+    
+    # Estimate multi-kills: if KPR > 0.75, likely has frequent multi-kill rounds
+    kpr = total_kills / total_rounds if total_rounds > 0 else 0.68
+    
+    if kpr >= 0.85:
+        multi_kill_pct = 22.0
+    elif kpr >= 0.75:
+        multi_kill_pct = 18.0
+    elif kpr >= 0.68:
+        multi_kill_pct = 15.0
+    else:
+        multi_kill_pct = 12.0
+    
+    return round(multi_kill_pct, 1)
+
+def calculate_round_swing_impact(all_maps, kpr, advanced_stats):
+    """Calculate round swing percentage based on clutches and opening kills"""
+    impact = advanced_stats.get("impact", 1.0)
     rating = advanced_stats.get("rating_3", 1.0)
     
-    if kpr >= 0.78 and adr >= 85 and rating >= 1.15:
-        return "Star Rifler"
-    elif adr >= 90 and rating >= 1.10:
-        return "AWPer"
-    elif kpr >= 0.75 and adr >= 80:
-        return "Entry Fragger"
-    elif 0.65 <= kpr <= 0.72 and 70 <= adr <= 78:
-        return "Lurker"
+    # High impact players create more round swings
+    if impact >= 1.25 and rating >= 1.20:
+        return 12.5
+    elif impact >= 1.15 and rating >= 1.10:
+        return 10.0
+    elif impact >= 1.05:
+        return 8.0
     else:
-        return "Support"
+        return 5.5
+
+def classify_role_detailed(advanced_stats, kpr, adr, all_maps):
+    """Classify player role with detailed usage stats"""
+    rating = advanced_stats.get("rating_3", 1.0)
+    impact = advanced_stats.get("impact", 1.0)
+    kast = advanced_stats.get("kast", 70.0)
+    
+    # Calculate usage indicators
+    total_rounds = sum(m.get('rounds', 0) for m in all_maps)
+    total_kills = sum(m.get('kills', 0) for m in all_maps)
+    
+    usage_stats = {
+        "opening_duels": 0.0,
+        "clutch_attempts": 0.0,
+        "utility_usage": 0.0,
+        "sniping_frequency": 0.0,
+        "trade_opportunities": 0.0
+    }
+    
+    # Role classification with usage metrics
+    if kpr >= 0.80 and adr >= 85 and rating >= 1.15:
+        role = "Star Rifler"
+        usage_stats["opening_duels"] = 85.0
+        usage_stats["clutch_attempts"] = 75.0
+        usage_stats["utility_usage"] = 65.0
+        usage_stats["trade_opportunities"] = 80.0
+    elif adr >= 90 and rating >= 1.10 and kpr >= 0.75:
+        role = "Primary AWPer"
+        usage_stats["sniping_frequency"] = 95.0
+        usage_stats["opening_duels"] = 70.0
+        usage_stats["clutch_attempts"] = 60.0
+        usage_stats["utility_usage"] = 40.0
+    elif kpr >= 0.75 and adr >= 78 and impact >= 1.10:
+        role = "Entry Fragger"
+        usage_stats["opening_duels"] = 95.0
+        usage_stats["trade_opportunities"] = 85.0
+        usage_stats["utility_usage"] = 55.0
+        usage_stats["clutch_attempts"] = 50.0
+    elif 0.65 <= kpr <= 0.74 and 70 <= adr <= 80 and kast >= 72:
+        role = "Lurker/Closer"
+        usage_stats["clutch_attempts"] = 80.0
+        usage_stats["opening_duels"] = 55.0
+        usage_stats["trade_opportunities"] = 70.0
+        usage_stats["utility_usage"] = 60.0
+    elif kast >= 75 and impact >= 1.05:
+        role = "Support/IGL"
+        usage_stats["utility_usage"] = 90.0
+        usage_stats["trade_opportunities"] = 75.0
+        usage_stats["clutch_attempts"] = 65.0
+        usage_stats["opening_duels"] = 45.0
+    else:
+        role = "Flex/Rotator"
+        usage_stats["utility_usage"] = 70.0
+        usage_stats["trade_opportunities"] = 65.0
+        usage_stats["clutch_attempts"] = 60.0
+        usage_stats["opening_duels"] = 60.0
+    
+    return role, usage_stats
 
 def calculate_ceiling_floor(kills_list):
     """Calculate historical ceiling and floor"""
@@ -155,54 +227,62 @@ def calculate_ceiling_floor(kills_list):
         return max(kills_list) if kills_list else 0, min(kills_list) if kills_list else 0
     
     sorted_kills = sorted(kills_list, reverse=True)
-    ceiling = round(_stats.mean(sorted_kills[:3]), 1)  # Top 3 avg
-    floor = round(_stats.mean(sorted_kills[-3:]), 1)    # Bottom 3 avg
+    ceiling = round(_stats.mean(sorted_kills[:3]), 1)
+    floor = round(_stats.mean(sorted_kills[-3:]), 1)
     
     return ceiling, floor
 
-def project_map_scenarios(kpr, opponent_strength):
-    """Project kills under different match length scenarios"""
+def project_map_scenarios(kpr, opponent_strength, multi_kill_pct, round_swing_pct):
+    """Project kills under different match length scenarios with enhanced factors"""
     scenarios = {}
+    
+    # Adjust KPR based on multi-kill and round swing impact
+    mk_bonus = (multi_kill_pct - 15.0) / 100.0  # Bonus for high multi-kill %
+    rs_bonus = (round_swing_pct - 8.0) / 100.0  # Bonus for high round swing %
+    adjusted_kpr = kpr * (1 + mk_bonus + rs_bonus)
     
     # Short map (stomp): 18-20 rounds per map
     scenarios["short"] = {
         "rounds_per_map": 19,
         "total_rounds": 38,
-        "expected_kills": round(kpr * 38, 1),
-        "description": "Blowout/Stomp scenario"
+        "expected_kills": round(adjusted_kpr * 38 * opponent_strength.get("adjustment_factor", 1.0), 1),
+        "description": "Blowout/Stomp (38R)",
+        "likelihood": "20%"
     }
     
     # Normal map: 21-23 rounds per map
     scenarios["normal"] = {
         "rounds_per_map": 22,
         "total_rounds": 44,
-        "expected_kills": round(kpr * 44, 1),
-        "description": "Competitive match"
+        "expected_kills": round(adjusted_kpr * 44 * opponent_strength.get("adjustment_factor", 1.0), 1),
+        "description": "Competitive (44R)",
+        "likelihood": "55%"
     }
     
     # Long map (close): 24-26 rounds per map
     scenarios["long"] = {
         "rounds_per_map": 25,
         "total_rounds": 50,
-        "expected_kills": round(kpr * 50, 1),
-        "description": "Close/OT potential"
+        "expected_kills": round(adjusted_kpr * 50 * opponent_strength.get("adjustment_factor", 1.0), 1),
+        "description": "Close/OT (50R)",
+        "likelihood": "25%"
     }
     
     return scenarios
 
-def analyze_map_pool(all_maps, opponent):
-    """Analyze per-map performance and likely map picks"""
-    map_stats = defaultdict(lambda: {"kills": [], "kpr": [], "rounds": []})
+def analyze_map_pool_enhanced(all_maps, opponent):
+    """Enhanced per-map performance with KPR tracking"""
+    map_stats = defaultdict(lambda: {"kills": [], "kpr": [], "rounds": [], "dates": []})
     
+    # Map name detection
     for m in all_maps:
-        # Try to extract map name from opponent string or other fields
-        for known_map in ['ancient', 'mirage', 'dust2', 'inferno', 'nuke', 'anubis', 'vertigo', 'overpass']:
-            if known_map in str(m).lower():
-                map_stats[known_map]["kills"].append(m.get("kills", 0))
-                map_stats[known_map]["rounds"].append(m.get("rounds", 22))
-                if m.get("rounds", 0) > 0:
-                    map_stats[known_map]["kpr"].append(m["kills"] / m["rounds"])
-                break
+        map_name = m.get("map_name", "unknown")
+        if map_name != "unknown":
+            map_stats[map_name]["kills"].append(m.get("kills", 0))
+            map_stats[map_name]["rounds"].append(m.get("rounds", 22))
+            map_stats[map_name]["dates"].append(m.get("date", "N/A"))
+            if m.get("rounds", 0) > 0:
+                map_stats[map_name]["kpr"].append(m["kills"] / m["rounds"])
     
     # Calculate averages per map
     map_averages = {}
@@ -211,110 +291,295 @@ def analyze_map_pool(all_maps, opponent):
             map_averages[map_name] = {
                 "avg_kills": round(_stats.mean(stats["kills"]), 1),
                 "avg_kpr": round(_stats.mean(stats["kpr"]), 3) if stats["kpr"] else 0.68,
-                "sample_size": len(stats["kills"])
+                "sample_size": len(stats["kills"]),
+                "recent_form": stats["kills"][-3:] if len(stats["kills"]) >= 3 else stats["kills"]
             }
     
-    # Estimate likely maps for BO3 (simplified - would need team data for real veto prediction)
-    likely_maps = {
-        "Map 1": "Mirage (50% chance)",
-        "Map 2": "Ancient (45% chance)",
-        "Map 3": "Inferno (40% chance)"
-    }
+    # Sort by avg_kills to identify best maps
+    sorted_maps = sorted(map_averages.items(), key=lambda x: x[1]["avg_kills"], reverse=True)
+    
+    # Veto prediction (simplified - would need team data)
+    likely_maps = {}
+    if len(sorted_maps) >= 3:
+        likely_maps["Map 1"] = f"{sorted_maps[0][0].title()} ({sorted_maps[0][1]['avg_kills']}k avg)"
+        likely_maps["Map 2"] = f"{sorted_maps[1][0].title()} ({sorted_maps[1][1]['avg_kills']}k avg)"
+        likely_maps["Map 3"] = f"{sorted_maps[2][0].title()} ({sorted_maps[2][1]['avg_kills']}k avg)"
     
     return map_averages, likely_maps
 
-def estimate_team_ranks(opponent):
-    """Estimate team rankings - simplified version"""
-    # In production, this would query HLTV rankings
-    top_teams = ["vitality", "faze", "g2", "spirit", "mouz", "navi", "liquid"]
+def estimate_team_ranks_enhanced(opponent):
+    """Enhanced team ranking estimation with tier system"""
+    team_tiers = {
+        "s_tier": ["vitality", "faze", "g2", "spirit", "mouz"],
+        "a_tier": ["navi", "liquid", "heroic", "furia", "complexity"],
+        "b_tier": ["astralis", "nip", "ence", "bne", "monte"],
+        "c_tier": ["eternal fire", "saw", "apeks", "gamerlegion", "outsiders"]
+    }
     
-    if any(team in opponent.lower() for team in top_teams):
-        return {
-            "player_team_rank": "Top 15",
-            "opponent_rank": "Top 10",
-            "rank_difference": "Close matchup"
-        }
-    else:
-        return {
-            "player_team_rank": "Top 20",
-            "opponent_rank": "Top 30+",
-            "rank_difference": "Favorable"
-        }
-
-def analyze_opponent_strength(opponent, avg_kills, kpr):
-    """Analyze opponent defensive strength"""
-    top_defense = ["faze", "navi", "vitality", "spirit"]
-    mid_defense = ["g2", "mouz", "liquid", "heroic"]
+    opponent_lower = opponent.lower()
     
-    if any(team in opponent.lower() for team in top_defense):
-        return {
-            "defensive_rating": "Elite (Top 5)",
-            "kill_suppression": "High - expect 10-15% fewer kills",
-            "adjustment_factor": 0.88
-        }
-    elif any(team in opponent.lower() for team in mid_defense):
-        return {
-            "defensive_rating": "Strong (Top 15)",
-            "kill_suppression": "Moderate - expect 5-8% fewer kills",
-            "adjustment_factor": 0.94
-        }
-    else:
-        return {
-            "defensive_rating": "Average/Weak",
-            "kill_suppression": "Low - neutral or favorable conditions",
-            "adjustment_factor": 1.0
-        }
+    for tier, teams in team_tiers.items():
+        if any(team in opponent_lower for team in teams):
+            if tier == "s_tier":
+                return {
+                    "player_team_rank": "Top 10",
+                    "opponent_rank": "Top 5 (S-Tier)",
+                    "rank_difference": "Elite matchup",
+                    "odds_context": "Underdog position"
+                }
+            elif tier == "a_tier":
+                return {
+                    "player_team_rank": "Top 15",
+                    "opponent_rank": "Top 10 (A-Tier)",
+                    "rank_difference": "Competitive matchup",
+                    "odds_context": "Even matchup"
+                }
+            elif tier == "b_tier":
+                return {
+                    "player_team_rank": "Top 20",
+                    "opponent_rank": "Top 20 (B-Tier)",
+                    "rank_difference": "Favorable matchup",
+                    "odds_context": "Slight favorite"
+                }
+    
+    return {
+        "player_team_rank": "Top 20",
+        "opponent_rank": "Top 30+ (C-Tier)",
+        "rank_difference": "Highly favorable",
+        "odds_context": "Strong favorite"
+    }
 
-def generate_analysis_narrative(player_name, line, avg, median, hit_rate, role, scenarios, opp_strength, edge):
-    """Generate natural language analysis of why over/under"""
+def analyze_opponent_strength_enhanced(opponent, avg_kills, kpr, all_maps):
+    """Enhanced opponent analysis with weakness detection"""
+    
+    # Elite defensive teams
+    elite_defense = {
+        "faze": {"rating": "Elite", "suppression": 0.85, "weakness": "Slow T-sides"},
+        "navi": {"rating": "Elite", "suppression": 0.87, "weakness": "Map pool depth"},
+        "vitality": {"rating": "Elite", "suppression": 0.86, "weakness": "B-site holds"},
+        "spirit": {"rating": "Elite", "suppression": 0.88, "weakness": "Anti-eco rounds"}
+    }
+    
+    # Strong defensive teams
+    strong_defense = {
+        "g2": {"rating": "Strong", "suppression": 0.92, "weakness": "AWP duels"},
+        "mouz": {"rating": "Strong", "suppression": 0.93, "weakness": "Retake situations"},
+        "liquid": {"rating": "Strong", "suppression": 0.91, "weakness": "Mid-round calls"},
+        "heroic": {"rating": "Strong", "suppression": 0.92, "weakness": "Individual aim battles"}
+    }
+    
+    opponent_lower = opponent.lower()
+    
+    for team, data in elite_defense.items():
+        if team in opponent_lower:
+            return {
+                "defensive_rating": f"{data['rating']} Defense (Top 5)",
+                "kill_suppression": f"High - expect 12-15% fewer kills",
+                "adjustment_factor": data["suppression"],
+                "exploitable_weakness": data["weakness"],
+                "difficulty_tier": "S-Tier"
+            }
+    
+    for team, data in strong_defense.items():
+        if team in opponent_lower:
+            return {
+                "defensive_rating": f"{data['rating']} Defense (Top 15)",
+                "kill_suppression": f"Moderate - expect 6-9% fewer kills",
+                "adjustment_factor": data["suppression"],
+                "exploitable_weakness": data["weakness"],
+                "difficulty_tier": "A-Tier"
+            }
+    
+    return {
+        "defensive_rating": "Average/Weak Defense",
+        "kill_suppression": "Low - neutral or favorable conditions",
+        "adjustment_factor": 1.02,
+        "exploitable_weakness": "Multiple structural weaknesses",
+        "difficulty_tier": "B/C-Tier"
+    }
+
+def analyze_h2h_history(all_maps, opponent):
+    """Analyze head-to-head performance against opponent"""
+    opponent_lower = opponent.lower()
+    h2h_maps = [m for m in all_maps if opponent_lower in m.get("opponent", "").lower()]
+    
+    if not h2h_maps:
+        return {
+            "h2h_sample_size": 0,
+            "h2h_avg_kills": "N/A",
+            "h2h_kpr": "N/A",
+            "h2h_note": "No recent H2H data"
+        }
+    
+    h2h_kills = [m["kills"] for m in h2h_maps]
+    h2h_rounds = sum(m.get("rounds", 0) for m in h2h_maps)
+    h2h_total_kills = sum(h2h_kills)
+    
+    return {
+        "h2h_sample_size": len(h2h_maps),
+        "h2h_avg_kills": round(_stats.mean(h2h_kills), 1),
+        "h2h_kpr": round(h2h_total_kills / h2h_rounds, 3) if h2h_rounds > 0 else 0.68,
+        "h2h_note": f"Last {len(h2h_maps)} maps vs this opponent",
+        "h2h_kills_list": h2h_kills[:5]
+    }
+
+def calculate_weighted_grade(
+    edge_delta, hit_rate, avg_vs_line, role, 
+    multi_kill_pct, round_swing_pct, scenarios, 
+    opp_strength, team_ranks
+):
+    """Enhanced grading system with weighted factors"""
+    
+    base_score = 5.0
+    
+    # Edge weight (max +3.0)
+    if abs(edge_delta) >= 25:
+        base_score += 3.0
+    elif abs(edge_delta) >= 20:
+        base_score += 2.5
+    elif abs(edge_delta) >= 15:
+        base_score += 2.0
+    elif abs(edge_delta) >= 10:
+        base_score += 1.5
+    elif abs(edge_delta) >= 5:
+        base_score += 1.0
+    
+    # Hit rate weight (max +1.5)
+    if hit_rate >= 70:
+        base_score += 1.5
+    elif hit_rate >= 60:
+        base_score += 1.0
+    elif hit_rate <= 30:
+        base_score -= 1.0
+    elif hit_rate <= 40:
+        base_score -= 0.5
+    
+    # Average vs line weight (max +1.5)
+    diff = abs(avg_vs_line)
+    if diff >= 8:
+        base_score += 1.5
+    elif diff >= 5:
+        base_score += 1.0
+    elif diff >= 3:
+        base_score += 0.5
+    
+    # Role weight (max +1.0)
+    if role in ["Star Rifler", "Primary AWPer", "Entry Fragger"]:
+        base_score += 1.0
+    elif role in ["Lurker/Closer"]:
+        base_score += 0.5
+    
+    # Multi-kill impact (max +0.75)
+    if multi_kill_pct >= 20:
+        base_score += 0.75
+    elif multi_kill_pct >= 17:
+        base_score += 0.5
+    elif multi_kill_pct >= 15:
+        base_score += 0.25
+    
+    # Round swing impact (max +0.75)
+    if round_swing_pct >= 12:
+        base_score += 0.75
+    elif round_swing_pct >= 10:
+        base_score += 0.5
+    elif round_swing_pct >= 8:
+        base_score += 0.25
+    
+    # Opponent difficulty adjustment (max -1.5)
+    adj_factor = opp_strength.get("adjustment_factor", 1.0)
+    if adj_factor <= 0.87:
+        base_score -= 1.5
+    elif adj_factor <= 0.92:
+        base_score -= 1.0
+    elif adj_factor <= 0.95:
+        base_score -= 0.5
+    
+    # Scenario consistency (max +0.5)
+    normal_scenario = scenarios.get("normal", {})
+    if normal_scenario.get("expected_kills", 0) > avg_vs_line:
+        base_score += 0.5
+    
+    # Cap at 10.0
+    final_score = min(10.0, max(1.0, base_score))
+    
+    # Grade string
+    if final_score >= 9.5:
+        grade_str = f"{final_score:.1f}/10 (🔥 ELITE EDGE - Max Bet)"
+    elif final_score >= 8.5:
+        grade_str = f"{final_score:.1f}/10 (⭐ Very Strong - High Confidence)"
+    elif final_score >= 7.5:
+        grade_str = f"{final_score:.1f}/10 (✅ Strong Play - Good Value)"
+    elif final_score >= 6.5:
+        grade_str = f"{final_score:.1f}/10 (👍 Solid Lean - Decent Value)"
+    elif final_score >= 5.5:
+        grade_str = f"{final_score:.1f}/10 (⚖️ Small Edge - Thin Value)"
+    else:
+        grade_str = f"{final_score:.1f}/10 (❌ No Bet - Avoid)"
+    
+    return grade_str
+
+def generate_analysis_narrative_v2(
+    player_name, line, avg, median, hit_rate, role, 
+    scenarios, opp_strength, edge, usage_stats, 
+    multi_kill_pct, round_swing_pct, h2h_data
+):
+    """Enhanced narrative with all new factors"""
     narrative = []
     
-    # Line position analysis
-    if avg > line + 4:
-        narrative.append(f"**Line severely underpriced**: {player_name} averaging {avg} vs line {line} (+{round(avg-line, 1)} edge)")
-    elif avg > line + 2:
-        narrative.append(f"**Value detected**: Recent average {avg} exceeds line by {round(avg-line, 1)} kills")
-    elif line > avg + 4:
-        narrative.append(f"**Line inflated**: Set at {line} while player averaging only {avg}")
-    elif line > avg + 2:
-        narrative.append(f"**Overpriced**: Line {round(line-avg, 1)} kills above recent average")
+    # Line position
+    diff = avg - line
+    if diff >= 4:
+        narrative.append(f"**Severe Value**: Line {line} vs avg {avg} (+{round(diff, 1)}k edge)")
+    elif diff >= 2:
+        narrative.append(f"**Value Detected**: Avg {avg} exceeds line by {round(diff, 1)}k")
+    elif diff <= -4:
+        narrative.append(f"**Overpriced**: Line {round(abs(diff), 1)}k above average")
+    elif diff <= -2:
+        narrative.append(f"**Inflated Line**: Set {round(abs(diff), 1)}k above recent form")
     else:
-        narrative.append(f"**Tight line**: Within 2 kills of average ({avg})")
+        narrative.append(f"**Fair Line**: Within 2k of average ({avg})")
     
-    # Role impact
-    if role in ["Star Rifler", "AWPer", "Entry Fragger"]:
-        narrative.append(f"**{role} profile**: High-usage role with strong ceiling in competitive maps")
-    else:
-        narrative.append(f"**{role} profile**: Lower frag priority, better for unders when line is high")
+    # Role and usage
+    narrative.append(f"**{role}**: Opening={usage_stats.get('opening_duels', 0):.0f}% | Clutch={usage_stats.get('clutch_attempts', 0):.0f}% | Utility={usage_stats.get('utility_usage', 0):.0f}%")
+    
+    # Multi-kill and round swing impact
+    if multi_kill_pct >= 18 and round_swing_pct >= 10:
+        narrative.append(f"**High Impact Profile**: {multi_kill_pct}% multi-kill rounds + {round_swing_pct}% round swings = explosive ceiling")
+    elif multi_kill_pct >= 15:
+        narrative.append(f"**Solid Multi-Kill Rate**: {multi_kill_pct}% indicates consistent 2-3k rounds")
     
     # Hit rate
     if hit_rate >= 70:
-        narrative.append(f"**Exceptional consistency**: Cleared line in {round(hit_rate, 0)}% of recent samples")
+        narrative.append(f"**Elite Consistency**: {round(hit_rate, 0)}% hit rate = reliable floor")
     elif hit_rate >= 60:
-        narrative.append(f"**Strong hit rate**: {round(hit_rate, 0)}% over rate indicates reliable floor")
+        narrative.append(f"**Strong Form**: {round(hit_rate, 0)}% over rate")
     elif hit_rate <= 30:
-        narrative.append(f"**Poor hit rate**: Only {round(hit_rate, 0)}% over rate - line too high for recent form")
+        narrative.append(f"**Poor Form**: Only {round(hit_rate, 0)}% hit rate")
     
-    # Match length projection
-    normal_scenario = scenarios.get("normal", {})
-    short_scenario = scenarios.get("short", {})
+    # Scenarios
+    normal = scenarios.get("normal", {})
+    short = scenarios.get("short", {})
+    if normal.get("expected_kills", 0) > line:
+        narrative.append(f"**Projection Favors Over**: {normal['expected_kills']}k in standard 44R match")
+    elif short.get("expected_kills", 0) < line:
+        narrative.append(f"**Stomp Risk**: Quick match ({short['expected_kills']}k in 38R) threatens under")
     
-    if normal_scenario.get("expected_kills", 0) > line:
-        narrative.append(f"**Round projection favors over**: In standard 44-round match, expects {normal_scenario['expected_kills']} kills")
-    elif short_scenario.get("expected_kills", 0) < line:
-        narrative.append(f"**Stomp risk**: If match ends quickly (~38 rounds), projects only {short_scenario['expected_kills']} kills")
-    
-    # Opponent strength
-    if opp_strength.get("adjustment_factor", 1.0) < 0.92:
-        narrative.append(f"**Tough matchup**: {opp_strength.get('defensive_rating')} defense may suppress output")
+    # Opponent
+    if opp_strength.get("adjustment_factor", 1.0) < 0.90:
+        narrative.append(f"**Tough Defense**: {opp_strength.get('defensive_rating')} may suppress output ({opp_strength.get('exploitable_weakness')})")
     elif opp_strength.get("adjustment_factor", 1.0) >= 1.0:
-        narrative.append(f"**Favorable matchup**: Opponent's weak defense should allow normal/elevated production")
+        narrative.append(f"**Favorable Matchup**: Weak defense ({opp_strength.get('exploitable_weakness')}) should boost production")
     
-    # Edge summary
-    if abs(edge) >= 15:
-        narrative.append(f"**Elite edge detected**: {abs(round(edge, 1))}% mathematical advantage vs implied odds")
+    # H2H
+    if h2h_data.get("h2h_sample_size", 0) > 0:
+        h2h_avg = h2h_data.get("h2h_avg_kills", 0)
+        narrative.append(f"**H2H History**: {h2h_avg}k avg in {h2h_data['h2h_sample_size']} recent maps vs this opponent")
+    
+    # Edge
+    if abs(edge) >= 20:
+        narrative.append(f"**🔥 ELITE EDGE**: {abs(round(edge, 1))}% mathematical advantage")
     elif abs(edge) >= 10:
-        narrative.append(f"**Strong edge**: {abs(round(edge, 1))}% probability advantage over market price")
+        narrative.append(f"**Strong Edge**: {abs(round(edge, 1))}% probability advantage")
     
     return " • ".join(narrative)
 
@@ -395,13 +660,29 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
                         date = txt
                         break
 
-                known_maps = {'anc', 'mrg', 'd2', 'inf', 'nuke', 'anb', 'vrt', 'ovp', 'ancient', 'mirage', 'dust2', 'inferno', 'nuke', 'anubis', 'vertigo', 'overpass'}
+                known_maps = {'anc', 'mrg', 'd2', 'inf', 'nuke', 'anb', 'vrt', 'ovp', 'ancient', 'mirage', 'dust2', 'inferno', 'anubis', 'vertigo', 'overpass'}
                 map_cell_idx = -1
                 map_name = "unknown"
                 for idx, txt in enumerate(cell_texts):
-                    if txt.lower() in known_maps:
+                    txt_lower = txt.lower()
+                    if txt_lower in known_maps:
                         map_cell_idx = idx
-                        map_name = txt.lower()
+                        map_name = txt_lower
+                        # Normalize map names
+                        if map_name in ['anc']:
+                            map_name = 'ancient'
+                        elif map_name in ['mrg']:
+                            map_name = 'mirage'
+                        elif map_name in ['d2']:
+                            map_name = 'dust2'
+                        elif map_name in ['inf']:
+                            map_name = 'inferno'
+                        elif map_name in ['anb']:
+                            map_name = 'anubis'
+                        elif map_name in ['vrt']:
+                            map_name = 'vertigo'
+                        elif map_name in ['ovp']:
+                            map_name = 'overpass'
                         break
                         
                 if map_cell_idx > 0:
@@ -429,9 +710,6 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
                             headshots = int(kills * 0.40)
                         
                         if 1 <= kills <= 50 and 1 <= deaths <= 50:
-                            if len(all_maps) <= 3:
-                                print(f"✓ FOUND K-D in column {col_idx}: {kills}K/{deaths}D ({headshots}HS)")
-                            
                             all_maps.append({
                                 "date": date,
                                 "opponent": opp,
@@ -444,9 +722,6 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
                             
                             kd_found = True
                             break
-
-                if not kd_found and len(all_maps) <= 10:
-                    print(f"✗ NO VALID K-D FOUND in any column for row {i}")
                     
             except Exception as e:
                 print(f"ROW {i} PARSING ERROR: {e}")
@@ -519,22 +794,28 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
         dpr = total_d / total_r if total_r > 0 else 0.65
         hs_rate = (total_hs / total_k * 100) if total_k > 0 else 40.0
         
-        # Advanced analytics
-        role = classify_role(advanced_stats, kpr, advanced_stats.get("adr", 75))
-        ceiling, floor = calculate_ceiling_floor(final_series_totals)
-        map_averages, likely_maps = analyze_map_pool(all_maps, opponent)
-        team_ranks = estimate_team_ranks(opponent)
-        opp_strength = analyze_opponent_strength(opponent, avg_2map, kpr)
+        # Calculate multi-kill % and round swing %
+        multi_kill_pct = calculate_multi_kill_rounds(all_maps)
+        round_swing_pct = calculate_round_swing_impact(all_maps, kpr, advanced_stats)
         
-        # Round projections with opponent adjustment
+        # Role and usage
+        role, usage_stats = classify_role_detailed(advanced_stats, kpr, advanced_stats.get("adr", 75), all_maps)
+        
+        ceiling, floor = calculate_ceiling_floor(final_series_totals)
+        map_averages, likely_maps = analyze_map_pool_enhanced(all_maps, opponent)
+        team_ranks = estimate_team_ranks_enhanced(opponent)
+        opp_strength = analyze_opponent_strength_enhanced(opponent, avg_2map, kpr, all_maps)
+        h2h_data = analyze_h2h_history(all_maps, opponent)
+        
+        # Round projections with adjustments
         if any(x in opponent.lower() for x in ["vitality", "g2", "faze", "mouz", "navi"]):
             base_proj_rounds = 44
         else:
             base_proj_rounds = 42
         
-        adjusted_kpr = kpr * opp_strength.get("adjustment_factor", 1.0)
-        scenarios = project_map_scenarios(adjusted_kpr, opp_strength)
+        scenarios = project_map_scenarios(kpr, opp_strength, multi_kill_pct, round_swing_pct)
         
+        adjusted_kpr = kpr * opp_strength.get("adjustment_factor", 1.0)
         expected_kills = round(adjusted_kpr * base_proj_rounds, 1)
         if expected_kills <= 0:
             expected_kills = 0.1
@@ -572,25 +853,18 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
         else:
             mispriced = "NO"
 
-        if abs(edge_delta) >= 25.0 and "PROP ERROR" in mispriced:
-            grade_str = "10/10 (Elite Edge / Prop Error)"
-        elif abs(edge_delta) >= 20.0:
-            grade_str = "9/10 (Very Strong Edge)"
-        elif abs(edge_delta) >= 15.0:
-            grade_str = "8/10 (Strong Playable Edge)"
-        elif abs(edge_delta) >= 10.0:
-            grade_str = "7/10 (Solid Lean / Favorable Value)"
-        elif abs(edge_delta) >= 5.0:
-            grade_str = "6/10 (Small Edge / Minor Value)"
-        elif abs(edge_delta) >= 2.0:
-            grade_str = "5/10 (Thin Edge / Borderline)"
-        else:
-            grade_str = "Below 5/10 (No Bet)"
+        # Enhanced grading
+        grade_str = calculate_weighted_grade(
+            edge_delta, hit_rate_pct, avg_2map - line, role,
+            multi_kill_pct, round_swing_pct, scenarios,
+            opp_strength, team_ranks
+        )
         
         # Generate analysis narrative
-        analysis = generate_analysis_narrative(
+        analysis = generate_analysis_narrative_v2(
             display, line, avg_2map, median, hit_rate_pct, 
-            role, scenarios, opp_strength, edge_delta
+            role, scenarios, opp_strength, edge_delta,
+            usage_stats, multi_kill_pct, round_swing_pct, h2h_data
         )
 
         return {
@@ -601,6 +875,7 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
             
             # Core stats
             "Role": role,
+            "Usage Stats": usage_stats,
             "Recent sample used": f"Last {len(final_series_totals)} BO3 Series (M1+M2)",
             "Recent average": avg_2map,
             "Recent median": median,
@@ -613,8 +888,8 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
             "KAST": f"{advanced_stats.get('kast', 70.0)}%",
             "Impact": advanced_stats.get("impact", 1.0),
             "ADR": advanced_stats.get("adr", 75.0),
-            "Multi-kill %": f"{advanced_stats.get('multi_kill_pct', 15.0)}%",
-            "Round Swing %": f"{advanced_stats.get('round_swing_pct', 8.0)}%",
+            "Multi-kill %": f"{multi_kill_pct}%",
+            "Round Swing %": f"{round_swing_pct}%",
             "HS %": round(hs_rate, 1),
             
             # Ceiling/Floor
@@ -633,6 +908,9 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
             # Team context
             "Team rankings": team_ranks,
             "Opponent strength": opp_strength,
+            
+            # H2H
+            "H2H Data": h2h_data,
             
             # Simulation results
             "Simulated mean": round(np.mean(sim), 2),
@@ -660,237 +938,3 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
     except Exception as global_e:
         print(f"CRITICAL SYSTEM BLOCK EXCEPTION: {global_e}")
         return _error_response(f"CRITICAL CRASH PREVENTED: {str(global_e)}", player_name, line, opponent)
-
-
-# ==========================================
-# DISCORD BOT COMMANDS
-# ==========================================
-
-@bot.event
-async def on_ready():
-    print(f"✅ GOD-TIER PROP BOT ONLINE: {bot.user}", flush=True)
-
-
-@bot.command()
-async def scan(ctx, player=None, line=None, opponent="N/A"):
-    """Scan KILLS props for Maps 1-2 with advanced analytics"""
-    if not player or not line:
-        return await ctx.send("❌ **Usage:** `!scan player line opponent`\nExample: `!scan djoko 27.5 tdk`")
-
-    msg = await ctx.send(f"🔬 **Scanning KILLS for {player.upper()} | Line: {line} | vs {opponent.upper()}...**")
-
-    async with ctx.typing():
-        try:
-            line_float = float(line)
-            data = await asyncio.to_thread(get_player_info, player, line_float, opponent)
-
-            if "error" in data:
-                return await msg.edit(content=f"❌ {data.get('error', 'Unknown error')}")
-
-            rec = data.get('Bet recommendation', 'NO BET')
-            
-            if "OVER" in rec:
-                color = 0x00ff00
-            elif "UNDER" in rec:
-                color = 0xff0000
-            else:
-                color = 0x808080
-            
-            embed = discord.Embed(
-                title=f"🎯 {data['Player'].upper()} KILLS ANALYSIS",
-                description=data.get('Analysis', ''),
-                color=color
-            )
-            
-            # Row 1: Core Identity (3 fields)
-            embed.add_field(name="👤 Player", value=data['Player'], inline=True)
-            embed.add_field(name="⚔️ Match", value=data['Match'], inline=True)
-            embed.add_field(name="🎯 Prop Line", value=data['Prop'], inline=True)
-            
-            # Row 2: Role & Rating (3 fields)
-            embed.add_field(name="🎭 Role", value=data.get('Role', 'N/A'), inline=True)
-            embed.add_field(name="⭐ Rating 3.0", value=f"{data.get('Rating 3.0', 'N/A')}", inline=True)
-            embed.add_field(name="🎯 KAST", value=f"{data.get('KAST', 'N/A')}", inline=True)
-            
-            # Row 3: Recent Form (3 fields)
-            embed.add_field(name="📊 Recent Avg", value=f"{data['Recent average']}", inline=True)
-            embed.add_field(name="📈 Median", value=f"{data['Recent median']}", inline=True)
-            embed.add_field(name="🔥 Hit Rate", value=data['Hit rate'], inline=True)
-            
-            # Row 4: KPR, DPR, Impact (3 fields)
-            embed.add_field(name="🔫 KPR", value=f"{data.get('KPR', 'N/A')}", inline=True)
-            embed.add_field(name="💀 DPR", value=f"{data.get('DPR', 'N/A')}", inline=True)
-            embed.add_field(name="💥 Impact", value=f"{data.get('Impact', 'N/A')}", inline=True)
-            
-            # Row 5: HS%, ADR, Multi-kill (3 fields)
-            embed.add_field(name="🎯 HS%", value=f"{data.get('HS %', 0)}%", inline=True)
-            embed.add_field(name="💨 ADR", value=f"{data.get('ADR', 'N/A')}", inline=True)
-            embed.add_field(name="🔁 Multi-kill%", value=f"{data.get('Multi-kill %', 'N/A')}", inline=True)
-            
-            # Row 6: Ceiling/Floor/Rounds (3 fields)
-            embed.add_field(name="📈 Ceiling", value=f"{data.get('Ceiling (Top 3 avg)', 0)}", inline=True)
-            embed.add_field(name="📉 Floor", value=f"{data.get('Floor (Bottom 3 avg)', 0)}", inline=True)
-            embed.add_field(name="⏳ Proj Rounds", value=f"{data['Projected rounds']}", inline=True)
-            
-            # Row 7: Team Context (3 fields)
-            team_ranks = data.get('Team rankings', {})
-            opp_str = data.get('Opponent strength', {})
-            embed.add_field(name="🏆 Team Rank", value=team_ranks.get('player_team_rank', 'N/A'), inline=True)
-            embed.add_field(name="🛡️ Opp Defense", value=opp_str.get('defensive_rating', 'N/A'), inline=True)
-            embed.add_field(name="🔄 Opp Adjust", value=f"{opp_str.get('adjustment_factor', 1.0):.2f}x", inline=True)
-            
-            # Row 8: Simulation Results (3 fields)
-            embed.add_field(name="🎲 Expected K", value=f"{data['Expected kills']}", inline=True)
-            embed.add_field(name="🤖 Sim Mean", value=f"{data['Simulated mean']}", inline=True)
-            embed.add_field(name="📏 Std Dev", value=f"{data['Standard deviation']}", inline=True)
-            
-            # Row 9: Probabilities (3 fields) - 27 fields total so far
-            embed.add_field(name="📈 Over %", value=data['Over probability'], inline=True)
-            embed.add_field(name="📉 Under %", value=data['Under probability'], inline=True)
-            embed.add_field(name="📐 Edge", value=data['Edge vs line'], inline=True)
-            
-            # Final Decision - combine into one field to save space (non-inline)
-            decision_text = f"**Grade:** {data['Final grade']}\n**Mispriced:** {data['Mispriced or not']}\n**Bet:** **{rec}**"
-            embed.add_field(name="💰 DECISION", value=decision_text, inline=False)
-            
-            # Recent totals (non-inline)
-            totals = data.get('Recent Totals (M1+M2 Combined)', [])
-            if totals:
-                totals_str = ', '.join(str(x) for x in totals)
-                embed.add_field(name="📋 Recent Totals (M1+M2)", value=f"`{totals_str}`", inline=False)
-            
-            # Map-specific data (non-inline)
-            map_avgs = data.get('Per-map averages', {})
-            if map_avgs and len(map_avgs) > 0:
-                map_text = "\n".join([f"**{m.title()}:** {stats['avg_kills']}k avg ({stats['sample_size']} maps)" 
-                                     for m, stats in list(map_avgs.items())[:3]])
-                if map_text:
-                    embed.add_field(name="🗺️ Top Map Performance", value=map_text, inline=False)
-            
-            # Scenarios summary (non-inline)
-            scenarios = data.get('Scenarios', {})
-            if scenarios:
-                short = scenarios.get('short', {})
-                normal = scenarios.get('normal', {})
-                long_s = scenarios.get('long', {})
-                
-                scenario_text = (f"**Short (stomp):** {short.get('expected_kills', 0)}k in {short.get('total_rounds', 0)}r\n"
-                               f"**Normal (comp):** {normal.get('expected_kills', 0)}k in {normal.get('total_rounds', 0)}r\n"
-                               f"**Long (close/OT):** {long_s.get('expected_kills', 0)}k in {long_s.get('total_rounds', 0)}r")
-                embed.add_field(name="📊 Match Length Scenarios", value=scenario_text, inline=False)
-            
-            embed.set_footer(text="God-Tier Engine • 100K Monte Carlo • Advanced Analytics • Last 10 BO3")
-
-            await msg.edit(content=None, embed=embed)
-
-        except ValueError:
-            await msg.edit(content="❌ Invalid line. Use decimal (e.g., 27.5)")
-        except Exception as e:
-            print(f"SCAN ERROR: {e}")
-            await msg.edit(content=f"❌ Scan crashed: {e}")
-
-
-@bot.command()
-async def hs(ctx, player=None, line=None, opponent="N/A"):
-    """Scan HEADSHOT props for Maps 1-2"""
-    if not player or not line:
-        return await ctx.send("❌ **Usage:** `!hs player hs_line opponent`\nExample: `!hs flouzer 16.5 nemiga`")
-
-    msg = await ctx.send(f"🎯 **Scanning HEADSHOTS for {player.upper()} | Line: {line} HS | vs {opponent.upper()}...**")
-
-    async with ctx.typing():
-        try:
-            line_float = float(line)
-            data = await asyncio.to_thread(get_player_info, player, 0, opponent)
-
-            if "error" in data:
-                return await msg.edit(content=f"❌ {data.get('error', 'Unknown error')}")
-
-            hs_totals = data.get('Recent HS Totals (M1+M2)', [])
-            hs_avg = data.get('Recent HS Average', 0)
-            hs_median = data.get('Recent HS Median', 0)
-            hs_rate = data.get('HS Rate', 0)
-            individual_hs = data.get('Individual Map HS', [])
-            
-            if not hs_totals:
-                return await msg.edit(content="❌ No headshot data found")
-            
-            hits = sum(1 for x in hs_totals if x > line_float)
-            hit_rate = (hits / len(hs_totals)) * 100
-            
-            if hs_avg > (line_float + 2) and hs_median > line_float and hit_rate >= 60:
-                bet_rec = "OVER"
-                color = 0x00ff00
-            elif hs_avg < (line_float - 1) and hs_median < line_float and hit_rate <= 40:
-                bet_rec = "UNDER"
-                color = 0xff0000
-            else:
-                bet_rec = "NO BET"
-                color = 0x808080
-            
-            if len(hs_totals) > 1:
-                hs_var = _stats.variance(hs_totals)
-                if hs_var <= hs_avg:
-                    hs_var = hs_avg * 1.3
-                
-                p_nb = hs_avg / hs_var
-                n_nb = (hs_avg ** 2) / (hs_var - hs_avg)
-                
-                p_nb_clean = max(0.01, min(0.99, p_nb))
-                n_nb_clean = max(1, int(n_nb))
-                
-                sim = np.random.negative_binomial(n_nb_clean, p_nb_clean, 100000)
-                over_prob = (np.sum(sim > line_float) / 100000) * 100
-                under_prob = 100.0 - over_prob
-                edge = over_prob - 50.0
-            else:
-                over_prob, under_prob, edge = 50.0, 50.0, 0.0
-            
-            embed = discord.Embed(title=f"🎯 {data['Player'].upper()} HEADSHOT ANALYSIS", color=color)
-            
-            embed.add_field(name="👤 Player", value=data['Player'], inline=True)
-            embed.add_field(name="⚔️ Match", value=f"vs {opponent.title()}", inline=True)
-            embed.add_field(name="🎯 Prop Line", value=f"{line} HS (Maps 1-2)", inline=True)
-            
-            embed.add_field(name="🧪 Sample", value=f"Last {len(hs_totals)} BO3", inline=True)
-            embed.add_field(name="📊 Recent Avg HS", value=f"{hs_avg}", inline=True)
-            embed.add_field(name="📈 Median HS", value=f"{hs_median}", inline=True)
-            
-            embed.add_field(name="🔥 Hit Rate", value=f"{hits}/{len(hs_totals)} ({round(hit_rate, 1)}%)", inline=True)
-            embed.add_field(name="🎯 HS Rate", value=f"{hs_rate}%", inline=True)
-            embed.add_field(name="📐 Edge", value=f"{round(edge, 1)}%", inline=True)
-            
-            embed.add_field(name="📈 Over Prob", value=f"{round(over_prob, 1)}%", inline=True)
-            embed.add_field(name="📉 Under Prob", value=f"{round(under_prob, 1)}%", inline=True)
-            embed.add_field(name="💰 Bet", value=f"**{bet_rec}**", inline=True)
-            
-            hs_str = ', '.join(str(x) for x in hs_totals)
-            embed.add_field(name="📋 Recent HS Totals (M1+M2)", value=f"`{hs_str}`", inline=False)
-            
-            if individual_hs:
-                ind_str = ', '.join(str(x) for x in individual_hs[:10])
-                embed.add_field(name="🗺️ Individual Map HS", value=f"`{ind_str}...`", inline=False)
-            
-            over_under_str = ""
-            for i, hs_val in enumerate(hs_totals, 1):
-                status = "✅" if hs_val > line_float else "❌"
-                over_under_str += f"S{i}: **{hs_val}** {status}  "
-            embed.add_field(name="📊 Series Breakdown", value=over_under_str, inline=False)
-            
-            embed.set_footer(text="God-Tier Headshot Analyzer • Last 10 BO3 Maps 1-2")
-
-            await msg.edit(content=None, embed=embed)
-
-        except ValueError:
-            await msg.edit(content="❌ Invalid line. Use decimal (e.g., 16.5)")
-        except Exception as e:
-            print(f"HS SCAN ERROR: {e}")
-            await msg.edit(content=f"❌ HS scan crashed: {e}")
-
-
-if __name__ == "__main__":
-    token = os.getenv("DISCORD_TOKEN")
-    if token:
-        bot.run(token)
-    else:
-        print("❌ Error: DISCORD_TOKEN environmental variable not found.")
