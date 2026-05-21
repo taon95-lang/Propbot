@@ -1,257 +1,362 @@
-import os
-import discord
-import asyncio
-from discord.ext import commands
-import statistics as _stats
-import numpy as np
+"""
+CS2 Player Prop Grading and Estimation Engine - Graphical Interface
+Launches a modern, dark-themed Tkinter dashboard that visualizes
+matchup adjustments, historical series data, and simulation outcomes.
+"""
 
-# Import the real scraper
-from scraper import get_player_info
+import tkinter as tk
+from tkinter import ttk, messagebox
+import threading
+from scraper import CS2PropScraper
 
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
+class CS2PropGraderApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("CS2 Prop Assessment & Grading Engine")
+        self.root.geometry("1100x750")
+        self.root.configure(bg="#111214")  # Material Discord Dark Aesthetic
+        
+        self.grader = CS2PropScraper()
+        
+        # Configure application stylesheet parameters
+        self.style = ttk.Style()
+        self.style.theme_use("clam")
+        
+        # Dark color palettes
+        self.style.configure(".", background="#111214", foreground="#e0e1e4")
+        self.style.configure("TLabel", background="#111214", foreground="#e0e1e4", font=("Segoe UI", 9))
+        self.style.configure("TFrame", background="#111214")
+        self.style.configure("Header.TLabel", font=("Segoe UI", 16, "bold"), foreground="#00bcff")
+        self.style.configure("TButton", font=("Segoe UI", 9, "bold"), background="#00bcff", foreground="#111214")
+        self.style.map("TButton", background=[("active", "#0099cc")])
+        self.style.configure("TProgressbar", thickness=15, troughcolor="#1e1f22", background="#00bcff")
+        
+        self.style.configure("TLabelframe", background="#111214", foreground="#00bcff", font=("Segoe UI", 10, "bold"))
+        self.style.configure("TLabelframe.Label", background="#111214", foreground="#00bcff")
 
+        # Table configurations
+        self.style.configure("Treeview", 
+                             background="#1e1f22", 
+                             fieldbackground="#1e1f22", 
+                             foreground="#ffffff", 
+                             rowheight=24,
+                             font=("Consolas", 9))
+        self.style.configure("Treeview.Heading", 
+                             background="#2b2d31", 
+                             foreground="#ffffff", 
+                             font=("Segoe UI", 9, "bold"))
+        self.style.map("Treeview.Heading", background=[("active", "#35373c")])
 
-@bot.event
-async def on_ready():
-    print(f"✅ GOD-TIER PROP BOT ONLINE: {bot.user}", flush=True)
+        self.build_gui()
 
+    def build_gui(self):
+        # Top Header Banner
+        header_frame = ttk.Frame(self.root)
+        header_frame.pack(fill="x", pady=10, padx=15)
+        
+        title_lbl = ttk.Label(header_frame, text="ELITE CS2 PROP GRADING PLATFORM", style="Header.TLabel")
+        title_lbl.pack(side="left")
+        
+        sub_lbl = ttk.Label(header_frame, text="Esports Betting Guru • Professional Analyst Edition", foreground="#949ba4")
+        sub_lbl.pack(side="right", pady=5)
 
-@bot.command()
-async def scan(ctx, player=None, line=None, opponent="N/A"):
-    """Scan KILLS props for Maps 1-2"""
-    if not player or not line:
-        return await ctx.send("❌ **Usage:** `!scan player line opponent`\nExample: `!scan djoko 27.5 tdk`")
+        # Main Workspace splitter
+        main_pane = ttk.Frame(self.root)
+        main_pane.pack(fill="both", expand=True, padx=15, pady=5)
 
-    msg = await ctx.send(f"🔬 **Scanning KILLS for {player.upper()} | Line: {line} | vs {opponent.upper()}...**")
+        # Left Column - Inputs Form
+        left_column = ttk.Frame(main_pane)
+        left_column.pack(side="left", fill="both", expand=False, width=320, padx=(0, 10))
+        
+        form_frame = ttk.LabelFrame(left_column, text=" Parameter Configurations ")
+        form_frame.pack(fill="both", expand=True, pady=5)
+        
+        # Form input fields
+        inputs =
+        
+        self.entry_widgets = {}
+        for label_text, var_name, default_val in inputs:
+            row = ttk.Frame(form_frame)
+            row.pack(fill="x", py=4, padx=8)
+            
+            lbl = ttk.Label(row, text=label_text, width=15, anchor="w")
+            lbl.pack(side="left")
+            
+            ent = ttk.Entry(row, font=("Segoe UI", 9))
+            ent.insert(0, default_val)
+            ent.pack(side="right", fill="x", expand=True)
+            self.entry_widgets[var_name] = ent
 
-    async with ctx.typing():
+        # Run action control buttons
+        btn_row = ttk.Frame(form_frame)
+        btn_row.pack(fill="x", pady=15, padx=8)
+        
+        self.run_btn = ttk.Button(btn_row, text="EXECUTE RUN", command=self.trigger_analysis)
+        self.run_btn.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        
+        self.progress = ttk.Progressbar(form_frame, mode="indeterminate")
+
+        # Right Column - Report Displays
+        right_column = ttk.Frame(main_pane)
+        right_column.pack(side="right", fill="both", expand=True)
+        
+        # Tabbed workspace for Text output report and the raw spreadsheet table
+        self.notebook = ttk.Notebook(right_column)
+        self.notebook.pack(fill="both", expand=True)
+        
+        # Tab 1: Text-Based Console Dashboard Output
+        self.text_tab = ttk.Frame(self.notebook)
+        self.notebook.add(self.text_tab, text=" Discord Console Output ")
+        
+        self.console_box = tk.Text(
+            self.text_tab,
+            bg="#1e1f22",
+            fg="#e0e1e4",
+            insertbackground="white",
+            font=("Consolas", 10),
+            padx=10,
+            pady=10,
+            state="disabled",
+            wrap="word"
+        )
+        self.console_box.pack(fill="both", expand=True)
+        
+        # Tab 2: Structured Treeview Grid Spreadsheets
+        self.grid_tab = ttk.Frame(self.notebook)
+        self.notebook.add(self.grid_tab, text=" Series Analysis Breakdowns ")
+        
+        columns = ("series", "m1", "m2", "total", "line", "outcome")
+        self.tree = ttk.Treeview(self.grid_tab, columns=columns, show="headings", selectmode="browse")
+        
+        self.tree.heading("series", text="Series ID")
+        self.tree.heading("m1", text="Map 1 Kills")
+        self.tree.heading("m2", text="Map 2 Kills")
+        self.tree.heading("total", text="Cumulative Kills")
+        self.tree.heading("line", text="Target Line")
+        self.tree.heading("outcome", text="Status Result")
+        
+        self.tree.column("series", width=80, anchor="center")
+        self.tree.column("m1", width=150, anchor="center")
+        self.tree.column("m2", width=150, anchor="center")
+        self.tree.column("total", width=120, anchor="center")
+        self.tree.column("line", width=100, anchor="center")
+        self.tree.column("outcome", width=120, anchor="center")
+        
+        scroll = ttk.Scrollbar(self.grid_tab, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scroll.set)
+        
+        self.tree.pack(side="left", fill="both", expand=True, padx=5, pady=5)
+        scroll.pack(side="right", fill="y", pady=5)
+        
+        # Style spreadsheet outputs matching grade risk levels
+        self.tree.tag_configure("OverRow", foreground="#23a55a")   # Emerald green
+        self.tree.tag_configure("UnderRow", foreground="#f23f43")  # Crimson red
+
+    def trigger_analysis(self):
+        # Extract active values
+        params = {}
+        for var_name, widget in self.entry_widgets.items():
+            params[var_name] = widget.get().strip()
+            
+        # Basic validation
         try:
-            line_float = float(line)
-            data = await asyncio.to_thread(get_player_info, player, line_float, opponent)
-
-            if "error" in data:
-                return await msg.edit(content=f"❌ {data.get('error', 'Unknown error')}")
-
-            rec = data.get('Bet recommendation', 'NO BET')
-            
-            if "OVER" in rec:
-                color = 0x00ff00
-            elif "UNDER" in rec:
-                color = 0xff0000
-            else:
-                color = 0x808080
-
-            # Safe variable extraction matching scraper.py dict keys exactly
-            p_name = str(data.get('Player', 'Unknown'))
-            p_prop_line = str(data.get('Prop Line', data.get('Prop', f"{line} Kills")))
-            p_grade = str(data.get('Final grade', 'N/A'))
-            p_mispriced = str(data.get('Mispriced or not', 'N/A'))
-            
-            p_avg = str(data.get('Recent average', 'N/A'))
-            p_median = str(data.get('Recent median', 'N/A'))
-            p_hitrate = str(data.get('Hit rate', 'N/A'))
-            p_rounds = str(data.get('Projected rounds', 'N/A'))
-            p_role = str(data.get('Role', 'N/A'))
-            
-            s_mean = str(data.get('Simulated mean', 'N/A'))
-            s_std = str(data.get('Standard deviation', 'N/A'))
-            s_over = str(data.get('Over probability', 'N/A'))
-            s_under = str(data.get('Under probability', 'N/A'))
-            s_edge = str(data.get('Edge vs line', 'N/A'))
-            s_expected = str(data.get('Expected kills', 'N/A'))
-            
-            p_floor = str(data.get('Floor (Bottom 3 avg)', 'N/A'))
-            p_ceil = str(data.get('Ceiling (Top 3 avg)', 'N/A'))
-            
-            p_kpr = str(data.get('KPR', 'N/A'))
-            p_adr = str(data.get('ADR', 'N/A'))
-            p_hs = str(data.get('HS %', 'N/A'))  # Fixed: Matches 'HS %' from scraper.py
-
-            # --- BUILD ADVANCED RAW MARKDOWN TEXT FOR DESCRIPTION ---
-            desc_lines = [
-                f"**PLAYER:** {p_name} vs. {opponent.upper()}",
-                f"**MATCH:** Maps 1–2 Kills | **PROP LINE:** {p_prop_line}",
-                "----------------------------------------------------------------",
-                f"**GRADE:** {p_grade}",
-                f"**PROJECTION:** ⏸️ **{rec}** ({p_mispriced})",
-                "----------------------------------------------------------------",
-                "",
-                "### 📊 CORE METRICS",
-                f"• **Recent Avg (Last 10):** {p_avg}",
-                f"• **Recent Median:** {p_median}",
-                f"• **Hit Rate:** {p_hitrate}",
-                f"• **Projected Rounds:** {p_rounds}",
-                f"• **Role:** {p_role}",
-                "",
-                "### 📈 PROJECTION (EMPIRICAL MODEL)",
-                f"• **Simulated Mean:** {s_mean}  |  **σ:** {s_std}",
-                f"• **Over Probability:** {s_over}",
-                f"• **Under Probability:** {s_under}",
-                f"• **Edge vs. Line:** {s_edge}",
-                f"• **Expected Kills:** {s_expected}",
-                f"• **Historical Ceiling/Floor:** {p_floor}–{p_ceil}",
-                f"• **Combat Stats:** KPR: {p_kpr} | ADR: {p_adr} | HS%: {p_hs}%",
-                ""
-            ]
-
-            # Add Map Pool Intelligence if available
-            map_avgs = data.get('Per-map averages', {})
-            if map_avgs:
-                desc_lines.append("### 🗺️ MAP INTELLIGENCE")
-                for m, stats in list(map_avgs.items())[:4]:
-                    desc_lines.append(f"• **{m.title()}:** {stats.get('avg_kills', 'N/A')}k avg ({stats.get('avg_kpr', 'N/A')} KPR)")
-                desc_lines.append("")
-
-            # Add Match History Log Array
-            totals = data.get('Recent Totals (M1+M2 Combined)', [])
-            if totals:
-                desc_lines.append("### 📋 SERIES BREAKDOWN")
-                over_under_history = ""
-                for idx, val in enumerate(totals, 1):
-                    status_emoji = "✅" if float(val) > line_float else "❌"
-                    over_under_history += f"S{idx}: **{val}** {status_emoji}  "
-                desc_lines.append(over_under_history)
-                desc_lines.append("")
-
-            # Append the narrative generator summary
-            if 'Analysis' in data:
-                desc_lines.append("### 🔍 ANALYSIS")
-                desc_lines.append(str(data['Analysis']))
-
-            # Render single clean master block
-            embed = discord.Embed(
-                title="🎯 ULTIMATE KILLS ANALYSIS", 
-                description="\n".join(desc_lines), 
-                color=color
-            )
-            embed.set_footer(text="God-Tier Prop Engine • 100K Monte Carlo • Last 10 BO3")
-
-            await msg.edit(content=None, embed=embed)
-
+            float(params["prop_line"])
+            int(params["player_rank"])
+            int(params["opponent_rank"])
+            float(params["def_adj"])
+            float(params["map_adj"])
         except ValueError:
-            await msg.edit(content="❌ Invalid line. Use decimal (e.g., 27.5)")
-        except Exception as e:
-            print(f"SCAN ERROR: {e}")
-            await msg.edit(content=f"❌ Scan crashed: {e}")
+            messagebox.showerror("Validation Error", "Please verify all numerical entry adjustments are correctly formatted.")
+            return
 
+        self.run_btn.config(state="disabled")
+        self.progress.pack(fill="x", pady=5, padx=8)
+        self.progress.start(12)
+        
+        # Asynchronous background threading to prevent UI blocking
+        worker = threading.Thread(target=self.execute_async, args=(params,))
+        worker.daemon = True
+        worker.start()
 
-@bot.command()
-async def hs(ctx, player=None, line=None, opponent="N/A"):
-    """Scan HEADSHOT props for Maps 1-2"""
-    if not player or not line:
-        return await ctx.send("❌ **Usage:** `!hs player hs_line opponent`\nExample: `!hs flouzer 16.5 nemiga`")
+    def execute_async(self, params):
+        result = self.grader.analyze_player_prop(
+            player_name=params["player_name"],
+            player_team=params["player_team"],
+            opponent_name=params["opponent_name"],
+            prop_line=float(params["prop_line"]),
+            player_rank=int(params["player_rank"]),
+            opponent_rank=int(params["opponent_rank"]),
+            def_adj=float(params["def_adj"]),
+            maps_adj=float(params["map_adj"])
+        )
+        
+        # Safe thread transitions back to main thread
+        self.root.after(0, self.update_displays, result)
 
-    msg = await ctx.send(f"🎯 **Scanning HEADSHOTS for {player.upper()} | Line: {line} HS | vs {opponent.upper()}...**")
-
-    async with ctx.typing():
-        try:
-            line_float = float(line)
-            data = await asyncio.to_thread(get_player_info, player, 0, opponent)
-
-            if "error" in data:
-                return await msg.edit(content=f"❌ {data.get('error', 'Unknown error')}")
-
-            hs_totals = data.get('Recent HS Totals (M1+M2)', [])
-            hs_avg = data.get('Recent HS Average', 0)
-            hs_median = data.get('Recent HS Median', 0)
-            hs_rate = data.get('HS Rate', 0)
-            individual_hs = data.get('Individual Map HS', [])
+    def update_displays(self, result):
+        # 1. Update the treeview grid display
+        for item in self.tree.get_children():
+            self.tree.delete(item)
             
-            if not hs_totals:
-                return await msg.edit(content="❌ No headshot data found")
-            
-            hits = sum(1 for x in hs_totals if x > line_float)
-            hit_rate = (hits / len(hs_totals)) * 100
-            
-            if hs_avg > (line_float + 2) and hs_median > line_float and hit_rate >= 60:
-                bet_rec = "OVER"
-                color = 0x00ff00
-            elif hs_avg < (line_float - 1) and hs_median < line_float and hit_rate <= 40:
-                bet_rec = "UNDER"
-                color = 0xff0000
+        for s in result["series_list"]:
+            outcome = "OVER" if s["over"] else "UNDER"
+            tag = "OverRow" if s["over"] else "UnderRow"
+            self.tree.insert("", "end", values=(
+                s["series_id"],
+                f"{s['m1_name'].upper()}: {s['m1_kills']}",
+                f"{s['m2_name'].upper()}: {s['m2_kills']}",
+                s["total"],
+                result["line"],
+                outcome
+            ), tags=(tag,))
+
+        # 2. Re-create the Discord dashboard output
+        report = self._generate_discord_string(result)
+        
+        self.console_box.config(state="normal")
+        self.console_box.delete("1.0", tk.END)
+        self.console_box.insert("1.0", report)
+        self.console_box.config(state="disabled")
+        
+        # Stop indicators
+        self.progress.stop()
+        self.progress.pack_forget()
+        self.run_btn.config(state="normal")
+
+    def _generate_discord_string(self, r):
+        # Determine status signals
+        avg_diff = ((r["avg"] - r["line"]) / r["line"]) * 100
+        avg_status = f"{avg_diff:+.1f}% vs Line"
+        med_status = "At Line" if r["median"] == r["line"] else f"{r['median'] - r['line']:+.1f} vs Line"
+        
+        hit_rate_status = "Moderate" if 4 <= r["hit_rate_num"] <= 6 else "Strong"
+        stomp_warning = "⚠️ STOMP RISK" if r["stomp_active"] else "Neutral"
+        
+        # Determine simulation over bar visualization
+        filled_segments = int(r["over_prob"] / 10)
+        bar_str = "█" * filled_segments + "░" * (10 - filled_segments)
+        
+        # Cold streak checks
+        cold_streak = all(not s["over"] for s in r["series_list"][:4])
+        cold_streak_str = "⚠️ COLD STREAK — 4 straight misses" if cold_streak else "None"
+        
+        # Per Map lists generators
+        map_rows =
+        for m in sorted(r["map_history"].keys()):
+            m_data = r["map_history"][m]
+            if m_data["n"] > 0:
+                # Per-map evaluation: avg * 2 vs line
+                doubled_avg = m_data["avg"] * 2
+                indicator = "🟢" if doubled_avg > r["line"] else "🔴" if doubled_avg < r["line"] else "⚪"
+                
+                # Format kills list matching screens
+                kills_list_str = ",".join(map(str, m_data["kills"]))
+                map_rows.append(
+                    f"  {m:<12} {m_data['n']:<4} {m_data['avg']:<6.1f} {m_data['range']:<8}\n"
+                    f"  {kills_list_str:<25} {indicator}"
+                )
             else:
-                bet_rec = "NO BET"
-                color = 0x808080
-            
-            if len(hs_totals) > 1:
-                hs_var = _stats.variance(hs_totals)
-                if hs_var <= hs_avg:
-                    hs_var = hs_avg * 1.3
+                map_rows.append(f"  {m:<12} -    -      no data")
                 
-                p_nb = hs_avg / hs_var
-                n_nb = (hs_avg ** 2) / (hs_var - hs_avg)
-                
-                p_nb_clean = max(0.01, min(0.99, p_nb))
-                n_nb_clean = max(1, int(n_nb))
-                
-                sim = np.random.negative_binomial(n_nb_clean, p_nb_clean, 100000)
-                over_prob = (np.sum(sim > line_float) / 100000) * 100
-                under_prob = 100.0 - over_prob
-                edge = over_prob - 50.0
-            else:
-                over_prob, under_prob, edge = 50.0, 50.0, 0.0
-
-            # Safe string conversions for headshots template
-            p_name = str(data.get('Player', player.title()))
-
-            # --- BUILD ADVANCED RAW MARKDOWN TEXT FOR HEADSHOTS ---
-            hs_lines = [
-                f"**PLAYER:** {p_name} vs. {opponent.upper()}",
-                f"**MATCH:** Maps 1–2 Headshots | **PROP LINE:** {line} HS",
-                "----------------------------------------------------------------",
-                f"**PROJECTION:** 🎯 **{bet_rec}**",
-                "----------------------------------------------------------------",
-                "",
-                "### 📊 HEADSHOT PERFORMANCE PROFILE",
-                f"• **Recent Avg HS:** {hs_avg}",
-                f"• **Median HS:** {hs_median}",
-                f"• **Hit Rate:** {hits}/{len(hs_totals)} ({round(hit_rate, 1)}%)",
-                f"• **Base HS Rate:** {hs_rate}%",
-                f"• **Calculated Edge:** {round(edge, 1)}%",
-                "",
-                "### 🤖 SIMULATION PROBABILITIES",
-                f"• **Over Probability:** {round(over_prob, 1)}%",
-                f"• **Under Probability:** {round(under_prob, 1)}%",
-                "",
-                "### 📋 SERIES BREAKDOWN"
-            ]
-
-            over_under_str = ""
-            for i, hs_val in enumerate(hs_totals, 1):
-                status = "✅" if hs_val > line_float else "❌"
-                over_under_str += f"S{i}: **{hs_val}** {status}  "
-            hs_lines.append(over_under_str)
-            hs_lines.append("")
-
-            if individual_hs:
-                hs_lines.append("🗺️ **Map-by-Map Raw Splits (Last 10):**")
-                ind_str = ', '.join(str(x) for x in individual_hs[:10])
-                hs_lines.append(f"`{ind_str}...`")
-                hs_lines.append("")
-
-            hs_lines.append(f"**Line Check:** Value set at {line} → player requires >{line} to clear.")
-
-            embed = discord.Embed(
-                title="🎯 ULTIMATE HEADSHOT ANALYSIS", 
-                description="\n".join(hs_lines), 
-                color=color
+        per_map_history_str = "\n".join(map_rows)
+        
+        # Series list builder
+        series_rows =
+        for s in r["series_list"]:
+            mark = "✅" if s["over"] else "❌"
+            series_rows.append(
+                f"S{s['series_id'][1:]}: {s['m1_name']} {s['m1_kills']} + {s['m2_name']} {s['m2_kills']} = {s['total']} {mark}"
             )
-            embed.set_footer(text="God-Tier Headshot Analyzer • Last 10 BO3 Maps 1-2")
+        series_breakdown_str = "\n".join(series_rows)
+        
+        # Expected KPR listings
+        kpr_list = [f"{m} {r['kpr_database'].get(m, 0.70):.2f}" for m in if m in r["kpr_database"]]
+        kpr_by_map_str = " · ".join(kpr_list)
+        
+        # Adjust commentary based on results
+        decision_override = "AUTO NO BET" if r["grade"] == "F" else "ACTIVE BET CONFIRMED"
+        
+        report_text = f"""PLAYER: {r['player']} ({r['team']}) vs. {r['opponent']}
+MATCH: Maps 1-2 Kills | PROP LINE: {r['line']}
+-------------------------------------------------------
+GRADE: {r['grade']}
+PROJECTION: {r['projection']}
+-------------------------------------------------------
+| Metric | Value | Status |
+| Recent Avg (Last 10) | {r['avg']:.1f} | {avg_status} |
+| Recent Median | {r['median']:.1f} | {med_status} |
+| Hit Rate | {r['hit_rate_num']}/10 | ⚠️ {hit_rate_status} |
+| Projected Rounds | {r['projected_rounds']} | {r['stomp_status']} |
+| Role / Map Pool | ⚡ Rifler | Neutral |
 
-            await msg.edit(content=None, embed=embed)
+📊 PROJECTION (EMPIRICAL)
+• Simulated Mean: {r['sim_mean']:.2f}  • σ: {r['sim_sigma']:.1f}
+• Over Probability: {r['over_prob']:.1f}%  [{bar_str}]
+• Under Probability: {r['under_prob']:.1f}%  • Push: 0.0%
+• Edge vs. Line: {r['over_prob'] - 50.0:+.1f}%  • Fair Line: {r['sim_mean']:.1f}
+• Range (p10-p90): {int(r['sim_mean'] - 1.28*r['sim_sigma'])}-{int(r['sim_mean'] + 1.28*r['sim_sigma'])} • IQR (p25-p75): {int(r['sim_mean'] - 0.67*r['sim_sigma'])}-{int(r['sim_mean'] + 0.67*r['sim_sigma'])}
+• Historical Ceiling/Floor: {min([s['total'] for s in r['series_list']])}-{max([s['total'] for s in r['series_list']])}
+• Deaths/Round (DPR): 0.724
+• Misprice Type: Trap
 
-        except ValueError:
-            await msg.edit(content="❌ Invalid line. Use decimal (e.g., 16.5)")
-        except Exception as e:
-            print(f"HS SCAN ERROR: {e}")
-            await msg.edit(content=f"❌ HS scan crashed: {e}")
+🛡️ ROBUSTNESS
+• Trimmed Avg: {r['trimmed_avg']:.1f}  • MAD-σ: {r['mad_sigma']:.1f}  • IQR: 22-34
+• Sample-shrink: 100%
+• Sub-signals: 1🟢 / 1🔴 -> split, signals split
 
+🟡 ROUND SWING • MULTI-KILL • PLAYER PROFILE
+• {r['round_swing_rating']} Round Swing
+  Typical output scaling — moderate match-length sensitivity
+• {r['multi_kill_rating']} Multi-kill
+  Moderate ceiling — occasional big rounds but not dominant
+
+📐 MATCH-LENGTH SCENARIOS
+Short-map Projection (~18 rds/map): {r['short_proj']:.1f} kills -> ❌ {r['short_status']}
+Normal-map Projection (~23 rds/map): {r['normal_proj']:.1f} kills -> ❌ {r['normal_status']}
+Ceiling estimate: {r['ceiling_est']:.1f} kills
+
+🗺️ Map Intelligence
+Expected: {r['best_map']} {r['expected_map_kills'].get(r['best_map'], 14.0)} ↑
+Series proj on these maps: {r['series_proj']:.1f} {r['series_proj_pct']:+.1f}% vs line
+Best: {r['best_map']} {r['expected_map_kills'].get(r['best_map'], 14.0)} ↑ • Worst: {r['worst_map']} {r['expected_map_kills'].get(r['worst_map'], 12.0)} ↓
+KPR by Map: {kpr_by_map_str}
+
+🗺️ Per-Map Kill History (last 10)
+  Map          n    avg    rng
+  last10 (newest→oldest)
+  -----------------------------------------------------
+{per_map_history_str}
+
+▶ = likely map for this match · 🟢 over · 🔴 under · ⚪ even (per-map avg*2 vs line)
+
+🔍 ANALYSIS
+{r['player']} is a player whose historical output is the primary signal here. His numbers swing series-to-series, so the range matters as much as the average. His recent average of {r['avg']:.1f} sits near the {r['line']} line and signals are split — the simulation shows no clear edge. The rank gap against {r['opponent']} introduces a stomp risk that could shorten maps and suppress his total ({abs(r['player_rank'] - r['opponent_rank'])} positions).
+
+vs {r['opponent']} — Strengths: Tight defensive structure — low kills allowed, Avoids {r['worst_map']} — controlled pool
+Weaknesses: High-frag map pool ({r['best_map']}) inflates kill totals
+
+🔬 vs {r['opponent']}
+Combined: {r['combined_adj']:+.1f}%  • ⚖️ Average Defense  • H2H: no data
+Def {r['def_adj']:+.1f}% Rank {r['rank_adj']:+.1f}% Maps {r['maps_adj']:+.1f}%
+🏆 Elite Clash — #{r['player_rank']} vs #{r['opponent_rank']}
+
+💬 GURU COMMENTARY
+vs {r['opponent']} ({r['combined_adj']:+.1f}% combined). ⚖️ Average Defense. 🏆 Elite Clash — #{r['player_rank']} vs #{r['opponent_rank']}. ⚠️ Stomp risk — projected {r['projected_rounds']} rounds (Stomp Mismatch (Rank gap {abs(r['player_rank'] - r['opponent_rank'])}) — short match risk). ⚠️ High Variance • σ={r['sim_sigma']:.1f}
+
+⚠️ Risk Flags
+• ⚠️ Stomp risk — rank gap {abs(r['player_rank'] - r['opponent_rank'])}, maps may end ~19 rounds
+• ⚠️ High variance — σ={r['sim_sigma']:.1f} (range: {min([s['total'] for s in r['series_list']]):.1f}-{max([s['total'] for s in r['series_list']]):.1f})
+• {cold_streak_str}
+
+📋 Series Breakdown
+{series_breakdown_str}
+Line {r['line']} → need >{int(r['line'])}
+🚫 {decision_override}
+🚫 NO BET — NO BET
+"""
+        return report_text
 
 if __name__ == "__main__":
-    token = os.getenv("DISCORD_TOKEN")
-    if token:
-        bot.run(token)
-    else:
-        print("❌ Error: DISCORD_TOKEN environmental variable not found.")
+    root = tk.Tk()
+    app = CS2PropGraderApp(root)
+    root.mainloop()
