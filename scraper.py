@@ -198,12 +198,13 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
                             })
                             
                             kd_found = True
-                            break
+                            break  # Exit the column loop, continue processing next row
 
                 if not kd_found and len(all_maps) <= 10:
                     print(f"✗ NO VALID K-D FOUND in any column for row {i}")
                     
             except Exception as e:
+                print(f"ROW {i} PARSING ERROR: {e}")
                 continue
 
         print(f"TOTAL MAPS FOUND: {len(all_maps)}")
@@ -281,6 +282,10 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
             
         p_nb = expected_kills / var_2map
         n_nb = (expected_kills ** 2) / (var_2map - expected_kills)
+        
+        # Bound parameters for numerical stability
+        p_nb = max(0.01, min(0.99, p_nb))
+        n_nb = max(1, int(n_nb))
         
         sim = np.random.negative_binomial(n_nb, p_nb, 100000)
         over_prob = (np.sum(sim > line) / 100000) * 100
