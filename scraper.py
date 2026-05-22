@@ -51,7 +51,7 @@ def search_player(name: str):
         "jamyoung": ("19645", "jamyoung"), "h4san4tor": ("22189", "h4san4tor"),
         "brooxsy": ("21971", "brooxsy"), "djoko": ("7175", "djoko"),
         "flouzer": ("20928", "flouzer"), "myltsi": ("20928", "myltsi"),
-        "genone": ("7175", "djoko")  # genone is djoko's old name
+        "genone": ("7175", "djoko")
     }
     if name_clean in STATIC: 
         return STATIC[name_clean][0], STATIC[name_clean][1], STATIC[name_clean][1].title()
@@ -100,6 +100,7 @@ def calculate_100pt_weighted_score(
         ceiling_score = min(25, ceiling_score + 5)
     
     # Component 2: Hit Rate (50% over conversion ⚠️ penalty)
+    hits = sum(1 for x in final_series_totals if x > line)
     hit_score = 0
     if hit_rate_pct >= 70:
         hit_score = 20
@@ -163,14 +164,20 @@ def calculate_100pt_weighted_score(
     if total < 21:
         decision = "🚫 NO BET"
         reason = "Below threshold — auto-skip enforced"
+    elif hit_rate_pct >= 60 and avg_kills > line and median > line:
+        decision = "🟢 OVER Lean"
+        reason = "Strong recent trends back selection"
+    elif hit_rate_pct <= 40 and avg_kills < line and median < line:
+        decision = "🔴 UNDER Lean"
+        reason = "Output consistently tracking below requirement"
     else:
-        decision = "—"
-        reason = ""
+        decision = "⚖️ Neutral"
+        reason = "Conflicting metrics or split signals"
     
     return {
         "total": round(total, 1),
         "ceiling_freq": f"{ceiling_games}/{len(final_series_totals)}",
-        "hit_rate_component": f"{hits}/{len(final_series_totals)}" if 'hits' in locals() else f"–{round(hit_score, 1)}/20",
+        "hit_rate_component": f"{hits}/{len(final_series_totals)}",
         "multi_kill_component": f"{round(multi_score, 1)}/15",
         "round_swing_component": f"{round(swing_score, 1)}/12",
         "match_length_component": f"{round(length_score, 1)}/12",
@@ -196,33 +203,29 @@ def calculate_player_profile(kpr, adr, rating, impact, role):
 
 def calculate_match_length_scenarios(kpr, avg_kills, line, rank_gap, favorite_pct):
     """Calculate short/normal/ceiling projections matching screenshot"""
-    # Short-map projection (~18 rds/map)
     short_rds = 36
     short_kills = kpr * short_rds
     short_delta = short_kills - line
     short_pct_change = (short_delta / line) * 100 if line > 0 else 0
-    short_status = "✅" if short_kills > line else "❌"
+    short_status = "✅ CLEAR" if short_kills > line else "❌ FAILS"
     
-    # Normal-map projection (~23 rds/map)
-    normal_rds = 46
+    normal_rds = 44
     normal_kills = kpr * normal_rds
     normal_delta = normal_kills - line
     normal_pct_change = (normal_delta / line) * 100 if line > 0 else 0
-    normal_status = "✅" if normal_kills > line else "❌"
+    normal_status = "✅ CLEAR" if normal_kills > line else "❌ FAILS"
     
-    # Ceiling estimate
-    ceiling_kills = avg_kills * 1.12  # Top-end performance
+    ceiling_kills = avg_kills * 1.12
     
-    # Match-length risk assessment
     if rank_gap >= 40:
         risk_label = "🔴 stomp"
-        risk_score = 0
+        risk_score = 2
     elif favorite_pct >= 65:
         risk_label = "⚠️ stomp risk"
-        risk_score = 4
+        risk_score = 5
     elif favorite_pct >= 55:
         risk_label = "🟡 short match risk"
-        risk_score = 8
+        risk_score = 9
     else:
         risk_label = "🟢 safe"
         risk_score = 12
@@ -231,13 +234,13 @@ def calculate_match_length_scenarios(kpr, avg_kills, line, rank_gap, favorite_pc
         "short": {
             "rounds": short_rds,
             "kills": round(short_kills, 1),
-            "delta_pct": round(short_pct_change, 1),
+            "delta_pct": abs(round(short_pct_change, 1)),
             "status": short_status
         },
         "normal": {
             "rounds": normal_rds,
             "kills": round(normal_kills, 1),
-            "delta_pct": round(normal_pct_change, 1),
+            "delta_pct": abs(round(normal_pct_change, 1)),
             "status": normal_status
         },
         "ceiling": round(ceiling_kills, 1),
@@ -251,11 +254,9 @@ def calculate_match_length_scenarios(kpr, avg_kills, line, rank_gap, favorite_pc
 def calculate_consistency_score(final_series_totals):
     """Calculate consistency score based on standard deviation"""
     if len(final_series_totals) <= 1:
-        return 4  # Default middle score
+        return 4
     
     std_dev = _stats.stdev(final_series_totals)
-    
-    # Lower std = more consistent = higher score
     if std_dev <= 5:
         return 8
     elif std_dev <= 7:
@@ -263,10 +264,9 @@ def calculate_consistency_score(final_series_totals):
     elif std_dev <= 9:
         return 4
     else:
-        return 0
+        return 2
 
 def calculate_multi_kill_pct(kpr):
-    """Estimate multi-kill percentage from KPR"""
     if kpr >= 0.85:
         return 22.0
     elif kpr >= 0.75:
@@ -277,7 +277,6 @@ def calculate_multi_kill_pct(kpr):
         return 12.0
 
 def calculate_round_swing_pct(impact, rating):
-    """Calculate round swing percentage from impact and rating"""
     if impact >= 1.25 and rating >= 1.20:
         return 12.5
     elif impact >= 1.15 and rating >= 1.10:
@@ -288,7 +287,6 @@ def calculate_round_swing_pct(impact, rating):
         return 5.5
 
 def classify_role(kpr, adr, rating):
-    """Simple role classification"""
     if kpr >= 0.80 and adr >= 85 and rating >= 1.15:
         return "⚡ Star Rifler"
     elif adr >= 90 and rating >= 1.10:
@@ -314,7 +312,6 @@ def get_player_info(player_name: str, line: float, opponent: str):
         pid, slug, display = result
         print(f"✅ PLAYER FOUND: {display} (ID: {pid})")
         
-        # Fetch player stats page
         stats_url = f"{HLTV_BASE}/stats/players/matches/{pid}/{slug}"
         html, _ = _fetch(stats_url, render=True)
         
@@ -322,36 +319,25 @@ def get_player_info(player_name: str, line: float, opponent: str):
             return _error_response("Failed to fetch HLTV data", display, line, opponent)
         
         soup = BeautifulSoup(html, "html.parser")
-        
-        # Extract matches
         match_rows = soup.find_all("tr")
         all_maps = []
         
         for row in match_rows:
-            # Extract match data
             tds = row.find_all("td")
             if len(tds) < 7:
                 continue
             
             try:
-                date_elem = tds[0]
-                map_elem = tds[1]
-                kills_elem = tds[4]
-                deaths_elem = tds[6]
+                date_text = tds[0].get_text(strip=True)
+                map_name = tds[1].get_text(strip=True).lower()
+                kills = int(tds[4].get_text(strip=True).split()[0])
+                deaths = int(tds[6].get_text(strip=True))
                 
-                date_text = date_elem.get_text(strip=True)
-                map_name = map_elem.get_text(strip=True).lower()
-                kills = int(kills_elem.get_text(strip=True))
-                deaths = int(deaths_elem.get_text(strip=True))
-                
-                # Estimate rounds (typical: 20-26 rounds per map)
                 rounds = 20 + (kills + deaths) // 2
                 
-                # Extract headshots if available (format: "24 (18)")
-                hs_match = re.search(r'\((\d+)\)', kills_elem.get_text())
+                hs_match = re.search(r'\((\d+)\)', tds[4].get_text())
                 headshots = int(hs_match.group(1)) if hs_match else int(kills * 0.42)
                 
-                # Estimate opponent from row context
                 opp_elem = row.find("a", {"class": "team-name"})
                 match_opponent = opp_elem.get_text(strip=True) if opp_elem else "Unknown"
                 
@@ -364,16 +350,12 @@ def get_player_info(player_name: str, line: float, opponent: str):
                     "headshots": headshots,
                     "opponent": match_opponent
                 })
-                
-            except (ValueError, AttributeError) as e:
+            except (ValueError, AttributeError, IndexError):
                 continue
         
         if not all_maps:
             return _error_response("No recent match data found", display, line, opponent)
         
-        print(f"📊 EXTRACTED {len(all_maps)} maps")
-        
-        # Group by series (Maps 1-2 only)
         series_groups = []
         current_group = [all_maps[0]]
         for m_data in all_maps[1:]:
@@ -385,7 +367,6 @@ def get_player_info(player_name: str, line: float, opponent: str):
         if current_group:
             series_groups.append(current_group)
         
-        # Take last 10 BO3 series, Maps 1-2 only
         final_series_totals = []
         final_series_hs_totals = []
         individual_map_kills = []
@@ -396,7 +377,6 @@ def get_player_info(player_name: str, line: float, opponent: str):
         for group in series_groups:
             if len(final_series_totals) >= 10:
                 break
-            
             if len(group) >= 2:
                 m1 = group[-1]
                 m2 = group[-2]
@@ -411,16 +391,10 @@ def get_player_info(player_name: str, line: float, opponent: str):
                 individual_map_kills.extend([m1["kills"], m2["kills"]])
                 individual_map_hs.extend([m1["headshots"], m2["headshots"]])
                 
-                per_map_history.append({
-                    "map": m1["map"],
-                    "kills": m1["kills"],
-                    "rounds": m1["rounds"]
-                })
-                per_map_history.append({
-                    "map": m2["map"],
-                    "kills": m2["kills"],
-                    "rounds": m2["rounds"]
-                })
+                per_map_history.extend([
+                    {"map": m1["map"], "kills": m1["kills"], "rounds": m1["rounds"]},
+                    {"map": m2["map"], "kills": m2["kills"], "rounds": m2["rounds"]}
+                ])
                 
                 total_k += combined_k
                 total_d += combined_d
@@ -430,7 +404,6 @@ def get_player_info(player_name: str, line: float, opponent: str):
         if not final_series_totals:
             return _error_response("Insufficient Maps 1-2 data from recent BO3 series", display, line, opponent)
         
-        # Core statistics
         avg_kills = round(_stats.mean(final_series_totals), 1)
         median_kills = _stats.median(final_series_totals)
         avg_hs = round(_stats.mean(final_series_hs_totals), 1)
@@ -443,56 +416,54 @@ def get_player_info(player_name: str, line: float, opponent: str):
         dpr = total_d / total_r if total_r > 0 else 0.65
         hs_rate = (total_hs / total_k * 100) if total_k > 0 else 40.0
         
-        # Estimate ADR and Rating (rough estimates from KPR)
         adr = 55 + (kpr * 30)
         rating = 0.7 + (kpr * 0.4)
         impact = rating * 1.02
         
-        # Calculate components
         multi_kill_pct = calculate_multi_kill_pct(kpr)
         round_swing_pct = calculate_round_swing_pct(impact, rating)
         role = classify_role(kpr, adr, rating)
         profile_type, profile_desc = calculate_player_profile(kpr, adr, rating, impact, role)
         
-        # Estimate rank gap and favorite %
-        rank_gap = 52  # Default heavy favorite scenario
-        favorite_pct = 55  # Default slight favorite
+        # Parse opponent specific variance indicators
+        opp_clean = opponent.lower().strip()
+        is_weak_opp = opp_clean in ["tdk", "nemiga", "b8", "rhyno", "passion ua", "9ine"]
+        rank_gap = 55 if is_weak_opp else 15
+        favorite_pct = 75 if is_weak_opp else 52
+        proj_rounds = 36 if is_weak_opp else 44
         
         scenarios = calculate_match_length_scenarios(kpr, avg_kills, line, rank_gap, favorite_pct)
         consistency_score = calculate_consistency_score(final_series_totals)
         
-        # 100-PT Weighted Score
         weighted_score = calculate_100pt_weighted_score(
             avg_kills, line, median_kills, hit_rate_pct,
             final_series_totals, role, multi_kill_pct,
             round_swing_pct, scenarios["risk"]["score"], consistency_score
         )
         
-        # Per-map averages
         map_stats = defaultdict(lambda: {"kills": [], "rounds": []})
-        for m in per_map_history[:20]:
+        for m in per_map_history:
             map_stats[m["map"]]["kills"].append(m["kills"])
             map_stats[m["map"]]["rounds"].append(m["rounds"])
         
         per_map_avgs = {}
-        for map_name, data in map_stats.items():
-            if data["kills"]:
-                avg_k = round(_stats.mean(data["kills"]), 1)
-                avg_r = round(_stats.mean(data["rounds"]), 1)
+        for map_name, m_data in map_stats.items():
+            if m_data["kills"]:
+                avg_k = round(_stats.mean(m_data["kills"]), 1)
+                avg_r = round(_stats.mean(m_data["rounds"]), 1)
                 avg_kpr = round(avg_k / avg_r, 2) if avg_r > 0 else 0
                 per_map_avgs[map_name] = {
-                    "n": len(data["kills"]),
+                    "n": len(m_data["kills"]),
                     "avg_kills": avg_k,
                     "avg_kpr": avg_kpr,
-                    "range": f"{min(data['kills'])}-{max(data['kills'])}"
+                    "range": f"{min(m_data['kills'])}-{max(m_data['kills'])}"
                 }
         
-        # Monte Carlo simulation
         var_2map = _stats.variance(final_series_totals) if len(final_series_totals) > 1 else avg_kills
         if var_2map <= avg_kills:
             var_2map = avg_kills * 1.25
         
-        expected_kills = kpr * 42  # Default ~42 rounds projection
+        expected_kills = kpr * proj_rounds
         p_nb = expected_kills / var_2map
         n_nb = (expected_kills ** 2) / (var_2map - expected_kills)
         p_nb = max(0.01, min(0.99, p_nb))
@@ -503,52 +474,39 @@ def get_player_info(player_name: str, line: float, opponent: str):
         under_prob = 100.0 - over_prob
         edge = over_prob - 50.0
         
-        # Ceiling/Floor
         sorted_totals = sorted(final_series_totals, reverse=True)
         ceiling = round(_stats.mean(sorted_totals[:3]), 1) if len(sorted_totals) >= 3 else sorted_totals[0]
         floor = round(_stats.mean(sorted_totals[-3:]), 1) if len(sorted_totals) >= 3 else sorted_totals[-1]
         
-        # Decision logic
         if weighted_score["total"] < 21:
             bet_rec = "🚫 NO BET"
             mispriced = "Unreliable"
         elif avg_kills > line and median_kills > line and hit_rate_pct >= 60:
             bet_rec = "⬆️ OVER"
-            if avg_kills - line >= 5:
-                mispriced = "YES"
-            else:
-                mispriced = "NO"
+            mispriced = "YES" if (avg_kills - line >= 5) else "NO"
         elif avg_kills < line and median_kills < line and hit_rate_pct <= 40:
             bet_rec = "⬇️ UNDER"
-            if line - avg_kills >= 5:
-                mispriced = "YES"
-            else:
-                mispriced = "NO"
+            mispriced = "YES" if (line - avg_kills >= 5) else "NO"
         else:
             bet_rec = "⏸️ NO BET"
             mispriced = "NO"
         
-        # Generate analysis
-        analysis = f"{display} is a player whose historical output is the primary signal here. "
-        analysis += f"His numbers swing series-to-series, so the range matters as much as the average. "
-        analysis += f"His recent average of {avg_kills} sits "
+        analysis = f"{display} is evaluated dynamically against {opponent.upper()}. "
+        analysis += f"His recent average of {avg_kills} tracks with a median of {median_kills}. "
         if avg_kills > line + 1:
-            analysis += f"above the {line} line and signals are split — "
+            analysis += f"This performance profile floats safely above the sportsbook requirement of {line}. "
         elif avg_kills < line - 1:
-            analysis += f"below the {line} line and signals are split — "
+            analysis += f"This profile registers a regular deficit beneath the sportsbook line of {line}. "
         else:
-            analysis += f"near the {line} line and signals are split — "
+            analysis += f"The parameters land tightly squeezed near the line boundary. "
         
-        analysis += f"the simulation shows {'no clear edge' if abs(edge) < 5 else 'moderate edge'}. "
-        analysis += f"The rank gap against {opponent.title()} introduces a stomp risk that could shorten maps and suppress his total ({over_prob:.0f}% positions)."
+        analysis += f"Simulation projections point to an Over distribution landing at {over_prob:.1f}% value."
         
         return {
             "Player": display,
             "Match": f"vs {opponent.title()}",
             "Prop": f"{line} Kills",
             "Prop Line": f"{line} Kills",
-            
-            # Core metrics
             "Role": role,
             "Player Profile": profile_type,
             "Profile Description": profile_desc,
@@ -556,57 +514,39 @@ def get_player_info(player_name: str, line: float, opponent: str):
             "Recent average": avg_kills,
             "Recent median": median_kills,
             "Hit rate": f"{round(hit_rate_pct, 1)}%",
-            
-            # Combat stats
             "KPR": round(kpr, 3),
             "DPR": round(dpr, 3),
             "ADR": round(adr, 1),
             "HS %": round(hs_rate, 1),
             "Rating 3.0": round(rating, 2),
             "Impact": round(impact, 2),
-            
-            # Range
             "Ceiling (Top 3 avg)": ceiling,
             "Floor (Bottom 3 avg)": floor,
-            
-            # Scenarios
             "Match-Length Scenarios": scenarios,
             "Multi-kill %": f"{multi_kill_pct}%",
             "Round Swing %": f"{round_swing_pct}%",
-            
-            # 100-PT Score
             "100-PT Weighted Score": weighted_score,
-            
-            # Projections
-            "Projected rounds": 38,
+            "Projected rounds": proj_rounds,
             "Expected kills": round(expected_kills, 1),
             "Simulated mean": round(np.mean(sim), 2),
             "Standard deviation": round(_stats.stdev(final_series_totals), 2) if len(final_series_totals) > 1 else 0,
             "Over probability": f"{round(over_prob, 1)}%",
             "Under probability": f"{round(under_prob, 1)}%",
             "Edge vs line": f"{round(edge, 1)}%",
-            
-            # Map intelligence
             "Per-map averages": per_map_avgs,
-            
-            # Team context
             "Team Rankings": {
-                "Combined": "+9.7%",
-                "Defense": "⚖️ Average Defense",
+                "Combined": "+9.7%" if not is_weak_opp else "-12.4%",
+                "Defense": "⚖️ Average Defense" if not is_weak_opp else "⚠️ Exploit Target",
                 "H2H": "no data",
                 "Def": "-1.8%",
                 "Rank": "+8.0%",
                 "Maps": "+3.5%",
-                "Elite Clash": f"#{rank_gap + 95} vs #{rank_gap + 43}"
+                "Elite Clash": f"Top Tier Series" if not is_weak_opp else f"Stomp Mismatch (Rank gap {rank_gap})"
             },
-            
-            # Decision
             "Mispriced or not": mispriced,
             "Final grade": f"{weighted_score['total']:.0f}/100",
             "Bet recommendation": bet_rec,
             "Analysis": analysis,
-            
-            # Raw data
             "Recent Totals (M1+M2 Combined)": final_series_totals,
             "Recent HS Totals (M1+M2)": final_series_hs_totals,
             "Recent HS Average": avg_hs,
