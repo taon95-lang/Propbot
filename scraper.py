@@ -1,11 +1,11 @@
-import os
 import re
+import os
 import time
+import statistics as _stats
 import functools
+import numpy as np
 from bs4 import BeautifulSoup
 from collections import defaultdict
-import statistics as _stats
-import numpy as np
 
 print = functools.partial(print, flush=True)
 
@@ -14,9 +14,6 @@ try:
 except ImportError:
     import requests
 
-# ==========================================
-# HLTV SCRAPER ENGINE
-# ==========================================
 HLTV_BASE = "https://www.hltv.org"
 SCRAPERAPI_KEY = os.environ.get("SCRAPERAPI_KEY")
 
@@ -50,8 +47,7 @@ def search_player(name: str):
         "jl": ("19206", "jl"), "xertion": ("20312", "xertion"),
         "jamyoung": ("19645", "jamyoung"), "h4san4tor": ("22189", "h4san4tor"),
         "brooxsy": ("21971", "brooxsy"), "djoko": ("7175", "djoko"),
-        "flouzer": ("20928", "flouzer"), "myltsi": ("20928", "myltsi"),
-        "genone": ("7175", "djoko")
+        "flouzer": ("20928", "flouzer")
     }
     if name_clean in STATIC: 
         return STATIC[name_clean][0], STATIC[name_clean][1], STATIC[name_clean][1].title()
@@ -82,481 +78,281 @@ def _error_response(msg, player_name, line, opponent):
         "error": msg
     }
 
-def calculate_100pt_weighted_score(
-    avg_kills, line, median, hit_rate_pct, 
-    final_series_totals, role, multi_kill_pct, 
-    round_swing_pct, match_length_risk_score, consistency_score
-):
-    """Calculate 100-point weighted score matching screenshot system"""
-    
-    # Component 1: Ceiling Frequency (30% max ≥line+5, 20% ≥line+10)
-    ceiling_games = sum(1 for x in final_series_totals if x >= line + 5)
-    mega_ceiling = sum(1 for x in final_series_totals if x >= line + 10)
-    ceiling_pct = (ceiling_games / len(final_series_totals)) * 100 if final_series_totals else 0
-    mega_pct = (mega_ceiling / len(final_series_totals)) * 100 if final_series_totals else 0
-    
-    ceiling_score = (ceiling_pct / 30.0) * 25  # Max 25 points
-    if mega_pct >= 20:
-        ceiling_score = min(25, ceiling_score + 5)
-    
-    # Component 2: Hit Rate (50% over conversion ⚠️ penalty)
-    hits = sum(1 for x in final_series_totals if x > line)
-    hit_score = 0
-    if hit_rate_pct >= 70:
-        hit_score = 20
-    elif hit_rate_pct >= 60:
-        hit_score = 17
-    elif hit_rate_pct >= 50:
-        hit_score = 13
-    elif hit_rate_pct >= 40:
-        hit_score = 8
-    else:
-        hit_score = 3
-    
-    # Penalty for exactly 50% hit rate
-    if 48 <= hit_rate_pct <= 52:
-        hit_score = max(0, hit_score - 5)
-    
-    # Component 3: Multi-kill
-    multi_score = 0
-    if multi_kill_pct >= 25:
-        multi_score = 15
-    elif multi_kill_pct >= 20:
-        multi_score = 12
-    elif multi_kill_pct >= 15:
-        multi_score = 7.5
-    else:
-        multi_score = 3
-    
-    # Component 4: Round Swing
-    swing_score = 0
-    if round_swing_pct >= 12:
-        swing_score = 12
-    elif round_swing_pct >= 10:
-        swing_score = 10
-    elif round_swing_pct >= 8:
-        swing_score = 6
-    else:
-        swing_score = 3
-    
-    # Component 5: Match-Length Risk
-    length_score = match_length_risk_score  # 0-12 points
-    
-    # Component 6: Role
-    role_score = 0
-    if "Star" in role or "AWP" in role:
-        role_score = 8
-    elif "Entry" in role:
-        role_score = 6
-    elif "Lurker" in role or "Closer" in role:
-        role_score = 4
-    else:
-        role_score = 0
-    
-    # Component 7: Consistency
-    consist_score = consistency_score  # 0-8 points
-    
-    # Total score
-    total = ceiling_score + hit_score + multi_score + swing_score + length_score + role_score + consist_score
-    total = min(100, max(0, total))
-    
-    # Auto-skip enforcement
-    if total < 21:
-        decision = "🚫 NO BET"
-        reason = "Below threshold — auto-skip enforced"
-    elif hit_rate_pct >= 60 and avg_kills > line and median > line:
-        decision = "🟢 OVER Lean"
-        reason = "Strong recent trends back selection"
-    elif hit_rate_pct <= 40 and avg_kills < line and median < line:
-        decision = "🔴 UNDER Lean"
-        reason = "Output consistently tracking below requirement"
-    else:
-        decision = "⚖️ Neutral"
-        reason = "Conflicting metrics or split signals"
-    
-    return {
-        "total": round(total, 1),
-        "ceiling_freq": f"{ceiling_games}/{len(final_series_totals)}",
-        "hit_rate_component": f"{hits}/{len(final_series_totals)}",
-        "multi_kill_component": f"{round(multi_score, 1)}/15",
-        "round_swing_component": f"{round(swing_score, 1)}/12",
-        "match_length_component": f"{round(length_score, 1)}/12",
-        "role_component": f"{round(role_score, 1)}/8",
-        "consistency_component": f"{round(consist_score, 1)}/8",
-        "decision": decision,
-        "reason": reason
-    }
-
-def calculate_player_profile(kpr, adr, rating, impact, role):
-    """Classify player profile as Balanced, Aggressive, or Defensive"""
-    if kpr >= 0.80 and adr >= 85:
-        profile_type = "⚔️ Aggressive"
-        description = "High-usage fragger — creates space through kills"
-    elif 0.65 <= kpr <= 0.79 and 70 <= adr <= 84:
-        profile_type = "⚖️ Balanced"
-        description = "Middle of the road — small edges only at right line"
-    else:
-        profile_type = "🛡️ Defensive"
-        description = "Low-frag utility player — poor bet profile"
-    
-    return profile_type, description
-
-def calculate_match_length_scenarios(kpr, avg_kills, line, rank_gap, favorite_pct):
-    """Calculate short/normal/ceiling projections matching screenshot"""
-    short_rds = 36
-    short_kills = kpr * short_rds
-    short_delta = short_kills - line
-    short_pct_change = (short_delta / line) * 100 if line > 0 else 0
-    short_status = "✅ CLEAR" if short_kills > line else "❌ FAILS"
-    
-    normal_rds = 44
-    normal_kills = kpr * normal_rds
-    normal_delta = normal_kills - line
-    normal_pct_change = (normal_delta / line) * 100 if line > 0 else 0
-    normal_status = "✅ CLEAR" if normal_kills > line else "❌ FAILS"
-    
-    ceiling_kills = avg_kills * 1.12
-    
-    if rank_gap >= 40:
-        risk_label = "🔴 stomp"
-        risk_score = 2
-    elif favorite_pct >= 65:
-        risk_label = "⚠️ stomp risk"
-        risk_score = 5
-    elif favorite_pct >= 55:
-        risk_label = "🟡 short match risk"
-        risk_score = 9
-    else:
-        risk_label = "🟢 safe"
-        risk_score = 12
-    
-    return {
-        "short": {
-            "rounds": short_rds,
-            "kills": round(short_kills, 1),
-            "delta_pct": abs(round(short_pct_change, 1)),
-            "status": short_status
-        },
-        "normal": {
-            "rounds": normal_rds,
-            "kills": round(normal_kills, 1),
-            "delta_pct": abs(round(normal_pct_change, 1)),
-            "status": normal_status
-        },
-        "ceiling": round(ceiling_kills, 1),
-        "risk": {
-            "label": risk_label,
-            "score": risk_score,
-            "description": f"~{short_rds} rds, fav {round(favorite_pct)}%"
-        }
-    }
-
-def calculate_consistency_score(final_series_totals):
-    """Calculate consistency score based on standard deviation"""
-    if len(final_series_totals) <= 1:
-        return 4
-    
-    std_dev = _stats.stdev(final_series_totals)
-    if std_dev <= 5:
-        return 8
-    elif std_dev <= 7:
-        return 6
-    elif std_dev <= 9:
-        return 4
-    else:
-        return 2
-
-def calculate_multi_kill_pct(kpr):
-    if kpr >= 0.85:
-        return 22.0
-    elif kpr >= 0.75:
-        return 18.0
-    elif kpr >= 0.68:
-        return 15.0
-    else:
-        return 12.0
-
-def calculate_round_swing_pct(impact, rating):
-    if impact >= 1.25 and rating >= 1.20:
-        return 12.5
-    elif impact >= 1.15 and rating >= 1.10:
-        return 10.0
-    elif impact >= 1.05:
-        return 8.0
-    else:
-        return 5.5
-
-def classify_role(kpr, adr, rating):
-    if kpr >= 0.80 and adr >= 85 and rating >= 1.15:
-        return "⚡ Star Rifler"
-    elif adr >= 90 and rating >= 1.10:
-        return "🎯 Primary AWPer"
-    elif kpr >= 0.75 and adr >= 78:
-        return "⚔️ Entry Fragger"
-    elif 0.65 <= kpr <= 0.74:
-        return "🎭 Lurker/Closer"
-    else:
-        return "🛡️ Support"
-
-def get_player_info(player_name: str, line: float, opponent: str):
-    """Main entry point - fetch and grade player prop"""
+def get_player_info(player_name, line=0.0, opponent="N/A"):
     try:
-        print(f"\n{'='*60}")
-        print(f"SCANNING: {player_name.upper()} | Line: {line} | vs {opponent.upper()}")
-        print(f"{'='*60}\n")
-        
-        result = search_player(player_name)
-        if not result:
-            return _error_response(f"Player '{player_name}' not found on HLTV", player_name, line, opponent)
-        
-        pid, slug, display = result
-        print(f"✅ PLAYER FOUND: {display} (ID: {pid})")
+        search_res = search_player(player_name)
+        if not search_res: 
+            return _error_response(f"FAIL: Could not find player '{player_name}' on HLTV.", player_name, line, opponent)
+        pid, slug, display = search_res
+        print(f"TARGET ACQUIRED: {display} (ID: {pid})")
         
         stats_url = f"{HLTV_BASE}/stats/players/matches/{pid}/{slug}"
         html, _ = _fetch(stats_url, render=True)
-        
-        if not html:
-            return _error_response("Failed to fetch HLTV data", display, line, opponent)
-        
+        if not html: 
+            return _error_response("FAIL: Stats page blocked or ScraperAPI failed after 3 retries.", display, line, opponent)
+
         soup = BeautifulSoup(html, "html.parser")
-        match_rows = soup.find_all("tr")
-        all_maps = []
+        table = soup.find("table", {"class": "stats-table"})
+        if not table:
+            return _error_response("FAIL: Stats table layout not found or changed on HLTV.", display, line, opponent)
         
-        for row in match_rows:
-            tds = row.find_all("td")
-            if len(tds) < 7:
+        tbody = table.find("tbody")
+        rows = tbody.find_all("tr") if tbody else table.find_all("tr")
+        print(f"PROCESSING {len(rows)} ROWS FROM STATS TABLE...")
+
+        all_maps = []
+        for i, row in enumerate(rows):
+            cols = row.find_all("td")
+            if len(cols) < 4:
                 continue
             
             try:
-                date_text = tds[0].get_text(strip=True)
-                map_name = tds[1].get_text(strip=True).lower()
-                kills = int(tds[4].get_text(strip=True).split()[0])
-                deaths = int(tds[6].get_text(strip=True))
+                cell_texts = [c.text.strip() for c in cols]
                 
-                rounds = 20 + (kills + deaths) // 2
+                kd_idx = -1
+                for col_idx, col in enumerate(cols):
+                    col_text = col.text.strip()
+                    kd_match = re.search(r'(\d+)\s*-\s*(\d+)', col_text)
+                    if kd_match:
+                        k_check = int(kd_match.group(1))
+                        d_check = int(kd_match.group(2))
+                        if 1 <= k_check <= 50 and 1 <= d_check <= 50:
+                            kd_idx = col_idx
+                            break
+
+                m_rounds = 0
+                parentheses_nums = []
+                for txt in cell_texts:
+                    p_matches = re.findall(r'\((\d+)\)', txt)
+                    for pm in p_matches:
+                        parentheses_nums.append(int(pm))
                 
-                hs_match = re.search(r'\((\d+)\)', tds[4].get_text())
-                headshots = int(hs_match.group(1)) if hs_match else int(kills * 0.42)
+                if len(parentheses_nums) >= 2:
+                    m_rounds = parentheses_nums[0] + parentheses_nums[1]
+                    
+                if m_rounds < 10 or m_rounds > 60:
+                    for idx, txt in enumerate(cell_texts):
+                        if idx == kd_idx:
+                            continue
+                        m = re.search(r'^(\d+)\s*-\s*(\d+)$', txt)
+                        if m:
+                            s1 = int(m.group(1))
+                            s2 = int(m.group(2))
+                            if 13 <= (s1 + s2) <= 50:
+                                m_rounds = s1 + s2
+                                break
                 
-                opp_elem = row.find("a", {"class": "team-name"})
-                match_opponent = opp_elem.get_text(strip=True) if opp_elem else "Unknown"
+                if m_rounds < 10 or m_rounds > 60:
+                    m_rounds = 22
+
+                date = "N/A"
+                for txt in cell_texts:
+                    if re.search(r'^\d{2}/\d{2}/\d{2}$', txt):
+                        date = txt
+                        break
+
+                known_maps = {'anc', 'mrg', 'd2', 'inf', 'nuke', 'anb', 'vrt', 'ovp', 'ancient', 'mirage', 'dust2', 'inferno', 'nuke', 'anubis', 'vertigo', 'overpass'}
+                map_cell_idx = -1
+                for idx, txt in enumerate(cell_texts):
+                    if txt.lower() in known_maps:
+                        map_cell_idx = idx
+                        break
+                        
+                if map_cell_idx > 0:
+                    opp = cell_texts[map_cell_idx - 1].lower()
+                else:
+                    opp = cell_texts[2].lower() if len(cell_texts) > 2 else "unknown"
+                    
+                opp = re.sub(r'\(.*\)', '', opp).strip()
+                opp = re.sub(r'\s+\d+\s*$', '', opp).strip()
                 
-                all_maps.append({
-                    "date": date_text,
-                    "map": map_name,
-                    "kills": kills,
-                    "deaths": deaths,
-                    "rounds": rounds,
-                    "headshots": headshots,
-                    "opponent": match_opponent
-                })
-            except (ValueError, AttributeError, IndexError):
+                kd_found = False
+                for col_idx, col in enumerate(cols):
+                    col_text = col.text.strip()
+                    kd_match = re.search(r'(\d+)\s*-\s*(\d+)', col_text)
+                    
+                    if kd_match:
+                        kills = int(kd_match.group(1))
+                        deaths = int(kd_match.group(2))
+                        
+                        # HEADSHOT EXTRACTION: HLTV shows HS in parentheses like "25-18 (12)"
+                        headshots = 0
+                        hs_match = re.search(r'(\d+)\s*-\s*\d+\s*\((\d+)\)', col_text)
+                        if hs_match:
+                            headshots = int(hs_match.group(2))
+                        else:
+                            # Fallback: estimate 40% HS rate
+                            headshots = int(kills * 0.40)
+                        
+                        if 1 <= kills <= 50 and 1 <= deaths <= 50:
+                            if len(all_maps) <= 3:
+                                print(f"✓ FOUND K-D in column {col_idx}: {kills}K/{deaths}D ({headshots}HS)")
+                            
+                            all_maps.append({
+                                "date": date,
+                                "opponent": opp,
+                                "kills": kills,
+                                "deaths": deaths,
+                                "headshots": headshots,
+                                "rounds": m_rounds
+                            })
+                            
+                            kd_found = True
+                            break  # Exit the column loop, continue processing next row
+
+                if not kd_found and len(all_maps) <= 10:
+                    print(f"✗ NO VALID K-D FOUND in any column for row {i}")
+                    
+            except Exception as e:
+                print(f"ROW {i} PARSING ERROR: {e}")
                 continue
-        
-        if not all_maps:
-            return _error_response("No recent match data found", display, line, opponent)
-        
+
+        print(f"TOTAL MAPS FOUND: {len(all_maps)}")
+
+        if len(all_maps) < 2:
+            return _error_response(f"FAIL: Found {len(all_maps)} maps. Player lacks analytical match history entries.", display, line, opponent)
+
         series_groups = []
-        current_group = [all_maps[0]]
-        for m_data in all_maps[1:]:
-            if m_data['opponent'] == current_group[0]['opponent'] and m_data['date'] == current_group[0]['date']:
-                current_group.append(m_data)
-            else:
+        if all_maps:
+            current_group = [all_maps[0]]
+            for m_data in all_maps[1:]:
+                if m_data['opponent'] == current_group[0]['opponent'] and m_data['date'] == current_group[0]['date']:
+                    current_group.append(m_data)
+                else:
+                    series_groups.append(current_group)
+                    current_group = [m_data]
+            if current_group:
                 series_groups.append(current_group)
-                current_group = [m_data]
-        if current_group:
-            series_groups.append(current_group)
-        
+
         final_series_totals = []
         final_series_hs_totals = []
         individual_map_kills = []
         individual_map_hs = []
-        per_map_history = []
-        total_k, total_d, total_r, total_hs = 0, 0, 0, 0
-        
+        total_k, total_r, total_hs = 0, 0, 0
+
         for group in series_groups:
             if len(final_series_totals) >= 10:
                 break
-            if len(group) >= 2:
-                m1 = group[-1]
-                m2 = group[-2]
                 
-                combined_k = m1["kills"] + m2["kills"]
-                combined_d = m1["deaths"] + m2["deaths"]
-                combined_r = m1["rounds"] + m2["rounds"]
-                combined_hs = m1["headshots"] + m2["headshots"]
+            if len(group) >= 2:
+                m1_kills = group[-1]["kills"]
+                m2_kills = group[-2]["kills"]
+                m1_hs = group[-1]["headshots"]
+                m2_hs = group[-2]["headshots"]
+                
+                individual_map_kills.extend([m1_kills, m2_kills])
+                individual_map_hs.extend([m1_hs, m2_hs])
+                
+                combined_k = m1_kills + m2_kills
+                combined_r = group[-1]["rounds"] + group[-2]["rounds"]
+                combined_hs = m1_hs + m2_hs
                 
                 final_series_totals.append(combined_k)
                 final_series_hs_totals.append(combined_hs)
-                individual_map_kills.extend([m1["kills"], m2["kills"]])
-                individual_map_hs.extend([m1["headshots"], m2["headshots"]])
-                
-                per_map_history.extend([
-                    {"map": m1["map"], "kills": m1["kills"], "rounds": m1["rounds"]},
-                    {"map": m2["map"], "kills": m2["kills"], "rounds": m2["rounds"]}
-                ])
-                
                 total_k += combined_k
-                total_d += combined_d
                 total_r += combined_r
                 total_hs += combined_hs
-        
+
         if not final_series_totals:
-            return _error_response("Insufficient Maps 1-2 data from recent BO3 series", display, line, opponent)
-        
-        avg_kills = round(_stats.mean(final_series_totals), 1)
-        median_kills = _stats.median(final_series_totals)
+            return _error_response("FAIL: Could not track enough valid multi-map samples from recent matches.", display, line, opponent)
+
+        avg_2map = round(_stats.mean(final_series_totals), 2)
+        median = _stats.median(final_series_totals)
         avg_hs = round(_stats.mean(final_series_hs_totals), 1)
         median_hs = _stats.median(final_series_hs_totals)
         
         hits = sum(1 for x in final_series_totals if x > line)
         hit_rate_pct = (hits / len(final_series_totals)) * 100
-        
+
         kpr = total_k / total_r if total_r > 0 else 0.68
-        dpr = total_d / total_r if total_r > 0 else 0.65
         hs_rate = (total_hs / total_k * 100) if total_k > 0 else 40.0
         
-        adr = 55 + (kpr * 30)
-        rating = 0.7 + (kpr * 0.4)
-        impact = rating * 1.02
+        if any(x in opponent.lower() for x in ["vitality", "g2", "faze", "mouz", "navi"]):
+            proj_rounds = 44
+        else:
+            proj_rounds = 42
+            
+        expected_kills = round(kpr * proj_rounds, 1)
+        if expected_kills <= 0:
+            expected_kills = 0.1
         
-        multi_kill_pct = calculate_multi_kill_pct(kpr)
-        round_swing_pct = calculate_round_swing_pct(impact, rating)
-        role = classify_role(kpr, adr, rating)
-        profile_type, profile_desc = calculate_player_profile(kpr, adr, rating, impact, role)
-        
-        # Parse opponent specific variance indicators
-        opp_clean = opponent.lower().strip()
-        is_weak_opp = opp_clean in ["tdk", "nemiga", "b8", "rhyno", "passion ua", "9ine"]
-        rank_gap = 55 if is_weak_opp else 15
-        favorite_pct = 75 if is_weak_opp else 52
-        proj_rounds = 36 if is_weak_opp else 44
-        
-        scenarios = calculate_match_length_scenarios(kpr, avg_kills, line, rank_gap, favorite_pct)
-        consistency_score = calculate_consistency_score(final_series_totals)
-        
-        weighted_score = calculate_100pt_weighted_score(
-            avg_kills, line, median_kills, hit_rate_pct,
-            final_series_totals, role, multi_kill_pct,
-            round_swing_pct, scenarios["risk"]["score"], consistency_score
-        )
-        
-        map_stats = defaultdict(lambda: {"kills": [], "rounds": []})
-        for m in per_map_history:
-            map_stats[m["map"]]["kills"].append(m["kills"])
-            map_stats[m["map"]]["rounds"].append(m["rounds"])
-        
-        per_map_avgs = {}
-        for map_name, m_data in map_stats.items():
-            if m_data["kills"]:
-                avg_k = round(_stats.mean(m_data["kills"]), 1)
-                avg_r = round(_stats.mean(m_data["rounds"]), 1)
-                avg_kpr = round(avg_k / avg_r, 2) if avg_r > 0 else 0
-                per_map_avgs[map_name] = {
-                    "n": len(m_data["kills"]),
-                    "avg_kills": avg_k,
-                    "avg_kpr": avg_kpr,
-                    "range": f"{min(m_data['kills'])}-{max(m_data['kills'])}"
-                }
-        
-        var_2map = _stats.variance(final_series_totals) if len(final_series_totals) > 1 else avg_kills
-        if var_2map <= avg_kills:
-            var_2map = avg_kills * 1.25
-        
-        expected_kills = kpr * proj_rounds
+        var_2map = _stats.variance(final_series_totals) if len(final_series_totals) > 1 else avg_2map
+        if var_2map <= expected_kills:
+            var_2map = expected_kills * 1.25
+            
         p_nb = expected_kills / var_2map
         n_nb = (expected_kills ** 2) / (var_2map - expected_kills)
+        
+        # Bound parameters for numerical stability
         p_nb = max(0.01, min(0.99, p_nb))
         n_nb = max(1, int(n_nb))
         
         sim = np.random.negative_binomial(n_nb, p_nb, 100000)
         over_prob = (np.sum(sim > line) / 100000) * 100
         under_prob = 100.0 - over_prob
-        edge = over_prob - 50.0
+        edge_delta = over_prob - 50.0
         
-        sorted_totals = sorted(final_series_totals, reverse=True)
-        ceiling = round(_stats.mean(sorted_totals[:3]), 1) if len(sorted_totals) >= 3 else sorted_totals[0]
-        floor = round(_stats.mean(sorted_totals[-3:]), 1) if len(sorted_totals) >= 3 else sorted_totals[-1]
-        
-        if weighted_score["total"] < 21:
-            bet_rec = "🚫 NO BET"
-            mispriced = "Unreliable"
-        elif avg_kills > line and median_kills > line and hit_rate_pct >= 60:
-            bet_rec = "⬆️ OVER"
-            mispriced = "YES" if (avg_kills - line >= 5) else "NO"
-        elif avg_kills < line and median_kills < line and hit_rate_pct <= 40:
-            bet_rec = "⬇️ UNDER"
-            mispriced = "YES" if (line - avg_kills >= 5) else "NO"
+        if avg_2map > line and median > line and hit_rate_pct >= 60.0:
+            bet_rec = "OVER"
+        elif avg_2map < line and median < line and hit_rate_pct <= 40.0:
+            bet_rec = "UNDER"
         else:
-            bet_rec = "⏸️ NO BET"
+            bet_rec = "NO BET"
+            
+        if line > 0 and (avg_2map - line) >= 8.0:
+            mispriced = "PROP ERROR (Wildly Underpriced)"
+        elif line > 0 and (line - avg_2map) >= 8.0:
+            mispriced = "PROP ERROR (Wildly Overpriced)"
+        elif abs(avg_2map - line) >= 4.0:
+            mispriced = "YES"
+        else:
             mispriced = "NO"
-        
-        analysis = f"{display} is evaluated dynamically against {opponent.upper()}. "
-        analysis += f"His recent average of {avg_kills} tracks with a median of {median_kills}. "
-        if avg_kills > line + 1:
-            analysis += f"This performance profile floats safely above the sportsbook requirement of {line}. "
-        elif avg_kills < line - 1:
-            analysis += f"This profile registers a regular deficit beneath the sportsbook line of {line}. "
+
+        if abs(edge_delta) >= 25.0 and "PROP ERROR" in mispriced:
+            grade_str = "10/10 (Elite Edge / Prop Error)"
+        elif abs(edge_delta) >= 20.0:
+            grade_str = "9/10 (Very Strong Edge)"
+        elif abs(edge_delta) >= 15.0:
+            grade_str = "8/10 (Strong Playable Edge)"
+        elif abs(edge_delta) >= 10.0:
+            grade_str = "7/10 (Solid Lean / Favorable Value)"
+        elif abs(edge_delta) >= 5.0:
+            grade_str = "6/10 (Small Edge / Minor Value)"
+        elif abs(edge_delta) >= 2.0:
+            grade_str = "5/10 (Thin Edge / Borderline)"
         else:
-            analysis += f"The parameters land tightly squeezed near the line boundary. "
-        
-        analysis += f"Simulation projections point to an Over distribution landing at {over_prob:.1f}% value."
-        
+            grade_str = "Below 5/10 (No Bet)"
+
         return {
             "Player": display,
             "Match": f"vs {opponent.title()}",
             "Prop": f"{line} Kills",
             "Prop Line": f"{line} Kills",
-            "Role": role,
-            "Player Profile": profile_type,
-            "Profile Description": profile_desc,
+            "Role": "Star / Entry Rifler",
             "Recent sample used": f"Last {len(final_series_totals)} BO3 Series (M1+M2)",
-            "Recent average": avg_kills,
-            "Recent median": median_kills,
+            "Recent average": avg_2map,
+            "Recent median": median,
             "Hit rate": f"{round(hit_rate_pct, 1)}%",
-            "KPR": round(kpr, 3),
-            "DPR": round(dpr, 3),
-            "ADR": round(adr, 1),
-            "HS %": round(hs_rate, 1),
-            "Rating 3.0": round(rating, 2),
-            "Impact": round(impact, 2),
-            "Ceiling (Top 3 avg)": ceiling,
-            "Floor (Bottom 3 avg)": floor,
-            "Match-Length Scenarios": scenarios,
-            "Multi-kill %": f"{multi_kill_pct}%",
-            "Round Swing %": f"{round_swing_pct}%",
-            "100-PT Weighted Score": weighted_score,
             "Projected rounds": proj_rounds,
-            "Expected kills": round(expected_kills, 1),
+            "Expected kills": expected_kills,
             "Simulated mean": round(np.mean(sim), 2),
             "Standard deviation": round(_stats.stdev(final_series_totals), 2) if len(final_series_totals) > 1 else 0,
             "Over probability": f"{round(over_prob, 1)}%",
             "Under probability": f"{round(under_prob, 1)}%",
-            "Edge vs line": f"{round(edge, 1)}%",
-            "Per-map averages": per_map_avgs,
-            "Team Rankings": {
-                "Combined": "+9.7%" if not is_weak_opp else "-12.4%",
-                "Defense": "⚖️ Average Defense" if not is_weak_opp else "⚠️ Exploit Target",
-                "H2H": "no data",
-                "Def": "-1.8%",
-                "Rank": "+8.0%",
-                "Maps": "+3.5%",
-                "Elite Clash": f"Top Tier Series" if not is_weak_opp else f"Stomp Mismatch (Rank gap {rank_gap})"
-            },
+            "Edge vs line": f"{round(edge_delta, 1)}%",
             "Mispriced or not": mispriced,
-            "Final grade": f"{weighted_score['total']:.0f}/100",
+            "Final grade": grade_str,
             "Bet recommendation": bet_rec,
-            "Analysis": analysis,
             "Recent Totals (M1+M2 Combined)": final_series_totals,
+            "Recent Totals": final_series_totals,
+            "Recent Individual Map Kills": individual_map_kills[:20],
+            # HEADSHOT DATA
             "Recent HS Totals (M1+M2)": final_series_hs_totals,
             "Recent HS Average": avg_hs,
             "Recent HS Median": median_hs,
             "Individual Map HS": individual_map_hs[:20],
             "HS Rate": round(hs_rate, 1)
         }
-        
-    except Exception as e:
-        print(f"CRITICAL ERROR: {e}")
-        import traceback
-        traceback.print_exc()
-        return _error_response(f"System error: {str(e)}", player_name, line, opponent)
+    except Exception as global_e:
+        print(f"CRITICAL SYSTEM BLOCK EXCEPTION: {global_e}")
+        return _error_response(f"CRITICAL CRASH PREVENTED: {str(global_e)}", player_name, line, opponent)
