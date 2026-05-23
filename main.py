@@ -6,7 +6,7 @@ from typing import Any, Dict, List
 import discord
 from discord.ext import commands
 
-from scraper_fixed import get_player_info
+from scraper import get_player_info
 
 BRAND = 0xF0A51A
 GREEN = 0x35D39B
