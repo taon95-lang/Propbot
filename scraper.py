@@ -409,19 +409,31 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
         pid, slug, display = search_res
         print(f"✅ TARGET ACQUIRED: {display} (ID: {pid})")
         
-        stats_url = f"{HLTV_BASE}/stats/players/{pid}/{slug}"
+        stats_url = f"{HLTV_BASE}/player/{pid}/{slug}"
+        print(f"📍 Fetching player profile from: {stats_url}")
         html, _ = _fetch(stats_url, render=True)
         if not html: 
             return _error_response("Stats page blocked after 3 retries. Try again.", display, line, opponent)
 
         soup = BeautifulSoup(html, "html.parser")
         
-        # Try multiple selectors for table (HLTV layout changes)
-        table = soup.find("table", {"class": "stats-table"})
-        if not table:
-            table = soup.find("table", {"class": re.compile(r".*stats.*", re.I)})
-        if not table:
-            table = soup.find("table")  # Fallback to first table
+        # Try to find matches table (could have various classes/structures)
+        table = None
+        tables = soup.find_all("table")
+        
+        # Look for table with match data (usually contains dates, maps, opponents)
+        for t in tables:
+            rows = t.find_all("tr")
+            if len(rows) > 2:
+                # Check if this table looks like match data
+                first_row_text = " ".join([td.text.strip() for td in rows[0].find_all(["td", "th"])])
+                if any(keyword in first_row_text.lower() for keyword in ['date', 'map', 'vs', 'opponent', 'k/']):
+                    table = t
+                    break
+        
+        # Fallback to first table if no match table found
+        if not table and tables:
+            table = tables[0]
         
         if not table:
             return _error_response("Stats table not found. HLTV layout may have changed.", display, line, opponent)
