@@ -433,17 +433,28 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
         if len(rows) == 0:
             # Debug: show table structure
             print(f"⚠️ WARNING: No rows found. Table classes: {table.get('class')}")
-            print(f"⚠️ Table first 200 chars: {str(table)[:200]}")
+            print(f"⚠️ Table has {len(table.find_all('tr'))} tr elements")
+            print(f"⚠️ Table HTML preview: {str(table)[:500]}")
             return _error_response("No match data found in stats table. Player may not have recent matches.", display, line, opponent)
 
         all_maps = []
+        rows_processed = 0
         for i, row in enumerate(rows):
+            # Try both td and th (some rows might be headers with th)
             cols = row.find_all("td")
+            if len(cols) < 4:
+                cols = row.find_all(["td", "th"])  # Include headers in fallback
             if len(cols) < 4:
                 continue
             
+            rows_processed += 1
+            
             try:
                 cell_texts = [c.text.strip() for c in cols]
+                
+                # Log first few rows to understand structure
+                if rows_processed <= 3:
+                    print(f"📍 ROW {i}: {len(cols)} cols | {cell_texts[:5]}")
                 
                 # Extract date (more flexible pattern)
                 date = "N/A"
@@ -498,7 +509,8 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
                 # Extract K/D and headshots
                 for col_idx, col in enumerate(cols):
                     col_text = col.text.strip()
-                    kd_match = re.search(r'(\d+)\s*-\s*(\d+)', col_text)
+                    # Try multiple K/D patterns: "10-5", "10 - 5", "10(2)-5" etc
+                    kd_match = re.search(r'(\d+)(?:\(\d+\))?\s*[-–—]\s*(\d+)', col_text)
                     
                     if kd_match:
                         kills = int(kd_match.group(1))
