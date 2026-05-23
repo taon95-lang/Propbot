@@ -416,13 +416,25 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
 
         soup = BeautifulSoup(html, "html.parser")
         
+        # Try multiple selectors for table (HLTV layout changes)
         table = soup.find("table", {"class": "stats-table"})
+        if not table:
+            table = soup.find("table", {"class": re.compile(r".*stats.*", re.I)})
+        if not table:
+            table = soup.find("table")  # Fallback to first table
+        
         if not table:
             return _error_response("Stats table not found. HLTV layout may have changed.", display, line, opponent)
         
         tbody = table.find("tbody")
         rows = tbody.find_all("tr") if tbody else table.find_all("tr")
         print(f"📊 PROCESSING {len(rows)} ROWS FROM HLTV...")
+        
+        if len(rows) == 0:
+            # Debug: show table structure
+            print(f"⚠️ WARNING: No rows found. Table classes: {table.get('class')}")
+            print(f"⚠️ Table first 200 chars: {str(table)[:200]}")
+            return _error_response("No match data found in stats table. Player may not have recent matches.", display, line, opponent)
 
         all_maps = []
         for i, row in enumerate(rows):
@@ -433,10 +445,10 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
             try:
                 cell_texts = [c.text.strip() for c in cols]
                 
-                # Extract date
+                # Extract date (more flexible pattern)
                 date = "N/A"
                 for txt in cell_texts:
-                    if re.search(r'^\d{2}/\d{2}/\d{2}$', txt):
+                    if re.search(r'\d{1,2}/\d{1,2}/\d{2,4}', txt) or re.search(r'\d{4}-\d{2}-\d{2}', txt):
                         date = txt
                         break
 
