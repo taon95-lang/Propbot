@@ -223,7 +223,7 @@ def make_data_embed(data: Dict[str, Any], line: float, opponent: str) -> discord
             f"**KPR:** `{data.get('KPR', 'N/A')}`\n"
             f"**DPR:** `{data.get('DPR', 'N/A')}`\n"
             f"**Impact:** `{data.get('Impact', 'N/A')}`\n"
-            f"**HS%:** `{data.get('HS %', 'N/A')}`\n"
+            f"**HS %:** `{data.get('HS %', 'N/A')}`\n"
             f"**Multi-kill %:** `{data.get('Multi-kill %', 'N/A')}`\n"
             f"**Round Swing %:** `{data.get('Round Swing %', 'N/A')}`\n"
             f"**HS Avg (M1+M2):** `{data.get('Recent HS Average', 'N/A')}`"
@@ -342,7 +342,6 @@ async def scan(ctx, player=None, line=None, *, opponent="N/A"):
     """
     Grade a CS2 player kills prop
     Usage: !scan <player> <line> <opponent>
-    Example: !scan pointer 28.5 yawara
     """
     if not player or not line:
         return await ctx.send(
@@ -355,7 +354,8 @@ async def scan(ctx, player=None, line=None, *, opponent="N/A"):
         f"Player: `{player}` | Kills O/U: `{line}` | Opponent: `{opponent}`"
     )
     
-    async with ctx.typing():
+    async join_typing = ctx.typing()
+    async with join_typing:
         try:
             line_float = float(line)
             print(f"🎯 SCAN REQUEST: {player} {line} vs {opponent}", flush=True)
@@ -385,7 +385,6 @@ async def hs(ctx, player=None, line=None, *, opponent="N/A"):
     """
     Grade a CS2 player headshots prop
     Usage: !hs <player> <line> <opponent>
-    Example: !hs pointer 10.5 yawara
     """
     if not player or not line:
         return await ctx.send(
@@ -398,7 +397,8 @@ async def hs(ctx, player=None, line=None, *, opponent="N/A"):
         f"Player: `{player}` | HS O/U: `{line}` | Opponent: `{opponent}`"
     )
     
-    async with ctx.typing():
+    async join_typing = ctx.typing()
+    async with join_typing:
         try:
             line_float = float(line)
             print(f"🎯 HS SCAN REQUEST: {player} {line} vs {opponent}", flush=True)
@@ -450,7 +450,7 @@ async def hs(ctx, player=None, line=None, *, opponent="N/A"):
             e.add_field(
                 name="🔫 HS PROFILE",
                 value=(
-                    f"**HS% (Overall):** `{data.get('HS Rate', 'N/A')}`\n"
+                    f"**HS % (Overall):** `{data.get('HS %', 'N/A')}`\n"
                     f"**HS Avg (M1+M2):** `{data.get('Recent HS Average', 'N/A')}`\n"
                     f"**KPR:** `{data.get('KPR', 'N/A')}`\n"
                     f"**Role:** `{data.get('Role', 'N/A')}`"
