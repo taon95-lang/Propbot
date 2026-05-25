@@ -72,6 +72,15 @@ def fnum(value, default=0.0):
         return default
 
 
+def safe_int(value, default=0):
+    try:
+        if value in [None, "", "N/A", "-", "--"]:
+            return default
+        return int(float(str(value).replace("%", "").replace(",", "").strip()))
+    except Exception:
+        return default
+
+
 def visible_lines(html: str):
     soup = BeautifulSoup(html, "html.parser")
     return [clean(x) for x in soup.stripped_strings if clean(x)]
@@ -101,12 +110,20 @@ def fetch(url: str, render: bool = False, timeout: int = 60):
 
     for target in targets:
         try:
-            resp = requests.get(target, headers=HEADERS, timeout=timeout, allow_redirects=True)
+            resp = requests.get(
+                target,
+                headers=HEADERS,
+                timeout=timeout,
+                allow_redirects=True
+            )
+
             if resp.status_code == 200 and len(resp.text or "") > 800:
                 final_url = resp.headers.get("Sa-Final-Url") or getattr(resp, "url", url)
                 return resp.text, final_url
+
         except Exception:
             pass
+
         time.sleep(1.0)
 
     return None, None
@@ -114,26 +131,35 @@ def fetch(url: str, render: bool = False, timeout: int = 60):
 
 def search_player(name: str):
     q = norm(name)
+
     if q in STATIC_IDS:
         pid, slug = STATIC_IDS[q]
         return pid, slug, slug.replace("-", " ").title()
 
-    html, final_url = fetch(f"{HLTV_BASE}/search?query={quote(name)}", render=True)
+    html, final_url = fetch(
+        f"{HLTV_BASE}/search?query={quote(name)}",
+        render=True
+    )
+
     if not html:
         return None
 
     if final_url and "/player/" in final_url:
         m = re.search(r"/player/(\d+)/([^/?#\s]+)", final_url)
+
         if m:
             pid, slug = m.group(1), m.group(2)
             return pid, slug, slug.replace("-", " ").title()
 
     soup = BeautifulSoup(html, "html.parser")
     found = []
+
     for a in soup.find_all("a", href=True):
         m = re.search(r"/player/(\d+)/([a-zA-Z0-9_-]+)", a["href"])
+
         if m:
             pid, slug = m.group(1), m.group(2)
+
             if pid not in {x[0] for x in found}:
                 found.append((pid, slug))
 
@@ -150,8 +176,8 @@ def search_player(name: str):
 
 def error_response(msg, player_name, line, opponent):
     return {
-        "Player": player_name.title(),
-        "Match": f"vs {opponent.title()}",
+        "Player": str(player_name).title(),
+        "Match": f"vs {str(opponent).title()}",
         "Prop Line": f"{line} Kills",
         "Bet recommendation": "NO BET",
         "error": msg,
@@ -160,6 +186,7 @@ def error_response(msg, player_name, line, opponent):
 
 def profile_metrics(profile_html: str):
     text = visible_text(profile_html)
+
     out = {
         "rating_3": "N/A",
         "firepower": "N/A",
@@ -186,23 +213,26 @@ def profile_metrics(profile_html: str):
         text,
         re.I,
     )
+
     if m:
         out.update({
             "rating_3": m.group(1),
-            "firepower": int(m.group(2)),
-            "entrying": int(m.group(3)),
-            "trading": int(m.group(4)),
-            "opening": int(m.group(5)),
-            "clutching": int(m.group(6)),
-            "sniping": int(m.group(7)),
-            "utility": int(m.group(8)),
+            "firepower": safe_int(m.group(2)),
+            "entrying": safe_int(m.group(3)),
+            "trading": safe_int(m.group(4)),
+            "opening": safe_int(m.group(5)),
+            "clutching": safe_int(m.group(6)),
+            "sniping": safe_int(m.group(7)),
+            "utility": safe_int(m.group(8)),
         })
 
     m = re.search(r"Headshots\s+([0-9]+(?:\.[0-9]+)?)%", text, re.I)
+
     if m:
         out["all_time_hs_pct"] = f"{m.group(1)}%"
 
     soup = BeautifulSoup(profile_html, "html.parser")
+
     for a in soup.find_all("a", href=True):
         if re.search(r"^/team/\d+/[^/]+$", a["href"]):
             out["team"] = clean(a.get_text(" "))
@@ -214,6 +244,7 @@ def profile_metrics(profile_html: str):
 
 def stats_metrics(stats_html: str):
     text = visible_text(stats_html)
+
     out = {
         "KPR": "N/A",
         "DPR": "N/A",
@@ -234,8 +265,10 @@ def stats_metrics(stats_html: str):
         "KAST": r"([0-9]+(?:\.[0-9]+)?%)\s+KAST\b",
         "Multi-kill %": r"([0-9]+(?:\.[0-9]+)?%)\s+Rounds with a multi-kill\b",
     }
+
     for key, rx in simple_before.items():
         m = re.search(rx, text, re.I)
+
         if m:
             out[key] = m.group(1)
 
@@ -245,28 +278,44 @@ def stats_metrics(stats_html: str):
         "Trade KPR": r"Trade kills per round\s+([0-9]+(?:\.[0-9]+)?)",
         "Round Swing": r"Round swing\s+([+\-]?[0-9]+(?:\.[0-9]+)?%)",
     }
+
     for key, rx in simple_after.items():
         m = re.search(rx, text, re.I)
+
         if m:
             out[key] = m.group(1)
 
     for cutoff in (5, 10, 20, 30, 50):
-        m = re.search(rf"([0-9]+(?:\.[0-9]+)?|-)\s+vs top {cutoff} opponents\s+\((\d+) maps\)", text, re.I)
+        m = re.search(
+            rf"([0-9]+(?:\.[0-9]+)?|-)\s+vs top {cutoff} opponents\s+\((\d+) maps\)",
+            text,
+            re.I
+        )
+
         if m:
-            out["vs_top"][cutoff] = {"rating": m.group(1), "maps": int(m.group(2))}
+            out["vs_top"][cutoff] = {
+                "rating": m.group(1),
+                "maps": safe_int(m.group(2)),
+            }
 
     return out
 
 
 def team_rank(team_html: str):
     text = visible_text(team_html)
-    out = {"HLTV Rank": "N/A", "Valve Rank": "N/A"}
+
+    out = {
+        "HLTV Rank": "N/A",
+        "Valve Rank": "N/A"
+    }
 
     m = re.search(r"World ranking\s+#(\d+)", text, re.I)
+
     if m:
         out["HLTV Rank"] = f"#{m.group(1)}"
 
     m = re.search(r"Valve ranking\s+Beta\s+#(\d+)", text, re.I)
+
     if m:
         out["Valve Rank"] = f"#{m.group(1)}"
 
@@ -274,227 +323,55 @@ def team_rank(team_html: str):
 
 
 def derive_role(profile):
-    sniping = int(profile.get("sniping") or 0)
-    firepower = int(profile.get("firepower") or 0)
-    entrying = int(profile.get("entrying") or 0)
-    trading = int(profile.get("trading") or 0)
-    opening = int(profile.get("opening") or 0)
-    utility = int(profile.get("utility") or 0)
+    sniping = safe_int(profile.get("sniping"))
+    firepower = safe_int(profile.get("firepower"))
+    entrying = safe_int(profile.get("entrying"))
+    trading = safe_int(profile.get("trading"))
+    opening = safe_int(profile.get("opening"))
+    utility = safe_int(profile.get("utility"))
 
     if sniping >= 55:
         return "Primary AWPer"
+
     if firepower >= 65 and opening >= 45:
         return "Star Entry Rifler"
+
     if entrying >= 55 and opening >= 35:
         return "Entry / Space Creator"
+
     if trading >= 60 and firepower >= 55:
         return "Trade / Lurk Rifler"
+
     if utility >= 60 and firepower <= 52:
         return "Support / Anchor"
+
     if firepower >= 58 and trading >= 50:
         return "Flex Rifler"
+
     return "Flex / Support Rifler"
-
-
-def results_links(player_id: str, limit=20):
-    html, _ = fetch(f"{HLTV_BASE}/results?player={player_id}", render=True)
-    if not html:
-        return []
-
-    soup = BeautifulSoup(html, "html.parser")
-    out, seen = [], set()
-    for a in soup.find_all("a", href=True):
-        href = a["href"]
-        txt = clean(a.get_text(" "))
-        if not href.startswith("/matches/"):
-            continue
-        if "bo3" not in txt.lower() and "best of 3" not in txt.lower():
-            continue
-        if not re.search(r"\b\d+\s*-\s*\d+\b", txt):
-            continue
-        full = urljoin(HLTV_BASE, href)
-        if full not in seen:
-            out.append(full)
-            seen.add(full)
-        if len(out) >= limit:
-            break
-    return out
-
-
-def stats_page_from_match(match_html: str):
-    m = re.search(r"/stats/matches/\d+/[^\"']+", match_html)
-    return urljoin(HLTV_BASE, m.group(0)) if m else None
-
-
-def map_list_from_stats_page(text: str):
-    maps = []
-    for a, b, code, name in re.findall(
-        r"(\d+)\s*-\s*(\d+)\s+([a-z0-9]+)\s+(Ancient|Anubis|Dust2|Inferno|Mirage|Nuke|Overpass|Vertigo|Train|Cache|Cobblestone)",
-        text,
-        re.I,
-    ):
-        maps.append({
-            "map_name": MAP_CODE.get(code.lower(), name),
-            "rounds": int(a) + int(b),
-            "score": f"{a}-{b}",
-        })
-    return maps
-
-
-def player_rows(stats_html: str, player_slug: str, player_display: str):
-    lines = visible_lines(stats_html)
-    needles = {norm(player_slug), norm(player_display)}
-    rows = []
-
-    row_rx = re.compile(
-        r"^\d+\s*:\s*\d+\s+\d+\s*:\s*\d+\s+\d+\s+"
-        r"\d+(?:\.\d+)?%\s+\d+(?:\.\d+)?%\s+\d+\s+"
-        r"\d+\s*\(\d+\).+?[+\-]?\d+(?:\.\d+)?%\s+[0-9]+(?:\.[0-9]+)?$"
-    )
-
-    for i, line in enumerate(lines):
-        if norm(line) not in needles:
-            continue
-        for j in range(1, 4):
-            if i + j >= len(lines):
-                continue
-            cand = lines[i + j]
-            if not row_rx.search(cand):
-                continue
-            pairs = re.findall(r"(\d+)\s*\((\d+)\)", cand)
-            if len(pairs) < 4:
-                continue
-            rows.append({
-                "kills": int(pairs[0][0]),
-                "headshots": int(pairs[0][1]),
-                "assists": int(pairs[2][0]),
-                "deaths": int(pairs[3][0]),
-                "rating_3": fnum(cand.split()[-1], 0.0),
-                "row": cand,
-            })
-            break
-    return rows
-
-
-def series_from_stats_page(stats_html: str, player_slug: str, player_display: str, current_team: str):
-    soup = BeautifulSoup(stats_html, "html.parser")
-    text = visible_text(stats_html)
-    title = clean(soup.title.get_text(" ")) if soup.title else ""
-    tm = re.search(r"([A-Za-z0-9 .\-]+) vs\. ([A-Za-z0-9 .\-]+)", title)
-    if not tm:
-        return None
-    team1, team2 = tm.group(1).strip(), tm.group(2).strip()
-
-    dm = re.search(r"(\d{4}-\d{2}-\d{2})\s+\d{2}:\d{2}", text)
-    date = dm.group(1) if dm else "N/A"
-
-    bo = re.search(r"bo(\d+)\s+Best of\s+(\d+)", text, re.I)
-    best_of = int(bo.group(2)) if bo else None
-    if best_of != 3:
-        return None
-
-    maps = map_list_from_stats_page(text)
-    rows = player_rows(stats_html, player_slug, player_display)
-    if len(maps) < 2 or len(rows) < 3:
-        return None
-
-    # rows[0] = all maps, rows[1] = map1, rows[2] = map2
-    m1, m2 = rows[1], rows[2]
-    map1, map2 = maps[0], maps[1]
-
-    opponent = team2 if norm(team1) == norm(current_team) else team1 if norm(team2) == norm(current_team) else team2
-
-    return {
-        "date": date,
-        "opponent": opponent,
-        "kills": m1["kills"] + m2["kills"],
-        "headshots": m1["headshots"] + m2["headshots"],
-        "deaths": m1["deaths"] + m2["deaths"],
-        "rounds": map1["rounds"] + map2["rounds"],
-        "map1": map1["map_name"],
-        "map2": map2["map_name"],
-        "raw_maps": [
-            {
-                "date": date,
-                "opponent": opponent,
-                "map_name": map1["map_name"],
-                "score": map1["score"],
-                "kills": m1["kills"],
-                "deaths": m1["deaths"],
-                "headshots": m1["headshots"],
-                "rounds": map1["rounds"],
-                "rating_3": m1["rating_3"],
-            },
-            {
-                "date": date,
-                "opponent": opponent,
-                "map_name": map2["map_name"],
-                "score": map2["score"],
-                "kills": m2["kills"],
-                "deaths": m2["deaths"],
-                "headshots": m2["headshots"],
-                "rounds": map2["rounds"],
-                "rating_3": m2["rating_3"],
-            },
-        ],
-    }
-
-
-def build_recent_series(player_id: str, player_slug: str, player_display: str, current_team: str, limit=10):
-    out = []
-    for match_url in results_links(player_id, limit=max(18, limit * 2)):
-        if len(out) >= limit:
-            break
-        match_html, _ = fetch(match_url, render=True)
-        if not match_html:
-            continue
-        stats_url = stats_page_from_match(match_html)
-        if not stats_url:
-            continue
-        stats_html, _ = fetch(stats_url, render=True)
-        if not stats_html:
-            continue
-        item = series_from_stats_page(stats_html, player_slug, player_display, current_team)
-        if item:
-            out.append(item)
-    return out[:limit]
-
-
-def flat_raw_maps(series_rows):
-    out = []
-    for row in series_rows:
-        out.extend(row.get("raw_maps", []))
-    return out
-
-
-def per_map_averages(raw_maps):
-    buckets = defaultdict(lambda: {"kills": [], "hs": [], "rounds": []})
-    for row in raw_maps:
-        m = row["map_name"]
-        buckets[m]["kills"].append(int(row["kills"]))
-        buckets[m]["hs"].append(int(row["headshots"]))
-        buckets[m]["rounds"].append(int(row["rounds"]))
-
-    result = {}
-    for m, parts in buckets.items():
-        total_rounds = sum(parts["rounds"]) or 1
-        result[m] = {
-            "avg_kills": round(stats.mean(parts["kills"]), 1),
-            "avg_hs": round(stats.mean(parts["hs"]), 1),
-            "avg_kpr": round(sum(parts["kills"]) / total_rounds, 3),
-            "sample_size": len(parts["kills"]),
-        }
-    return dict(sorted(result.items(), key=lambda x: x[1]["avg_kills"], reverse=True))
 
 
 def bootstrap(values, line):
     if not values:
-        return {"mean": "N/A", "median": "N/A", "std": "N/A", "q25": "N/A", "q75": "N/A", "over": "N/A", "under": "N/A", "edge": "N/A"}
+        return {
+            "mean": "N/A",
+            "median": "N/A",
+            "std": "N/A",
+            "q25": "N/A",
+            "q75": "N/A",
+            "over": "N/A",
+            "under": "N/A",
+            "edge": "N/A"
+        }
 
     arr = np.array(values, dtype=np.int32)
+
     np.random.seed(42)
+
     sims = np.random.choice(arr, 100000, replace=True)
+
     over = round(float((sims > line).mean() * 100), 1)
+
     return {
         "mean": round(float(np.mean(sims)), 2),
         "median": round(float(np.median(sims)), 2),
@@ -510,168 +387,96 @@ def bootstrap(values, line):
 def weighted_projection(values):
     if not values:
         return 0.0
+
     recent = values[:5]
     earlier = values[5:10]
+
     if not earlier:
         return round(stats.mean(recent), 1)
-    return round((stats.mean(recent) * 0.6) + (stats.mean(earlier) * 0.4), 1)
+
+    return round(
+        (stats.mean(recent) * 0.6) +
+        (stats.mean(earlier) * 0.4),
+        1
+    )
 
 
 def ceiling_floor(values):
     if not values:
         return "N/A", "N/A"
+
     if len(values) < 3:
         return max(values), min(values)
+
     s = sorted(values)
-    return round(stats.mean(s[-3:]), 1), round(stats.mean(s[:3]), 1)
 
-
-def upcoming_match_url(profile_html: str, current_team: str, opponent: str):
-    target = norm(opponent)
-    team = norm(current_team)
-    soup = BeautifulSoup(profile_html, "html.parser")
-    candidates = []
-
-    for a in soup.find_all("a", href=True):
-        href = a["href"]
-        if not href.startswith("/matches/"):
-            continue
-        blob = " ".join([href, a.get_text(" ")])
-        if target and target in norm(blob):
-            candidates.append(urljoin(HLTV_BASE, href))
-
-    for url in candidates:
-        if not team or team in norm(url):
-            return url
-    return candidates[0] if candidates else None
-
-
-def match_context(match_url: str, current_team: str):
-    out = {
-        "Match odds": "N/A",
-        "Moneyline": "N/A",
-        "Moneyline american": "N/A",
-        "Opponent ranking": "N/A",
-        "Likely maps": {},
-        "Veto": [],
-    }
-    if not match_url:
-        return out
-
-    analytics_url = match_url.replace("/matches/", "/betting/analytics/")
-    analytics_html, _ = fetch(analytics_url, render=True)
-    match_html, _ = fetch(match_url, render=True)
-
-    if analytics_html:
-        text = visible_text(analytics_html)
-        title = re.search(r"([A-Za-z0-9 .\-]+) vs\. ([A-Za-z0-9 .\-]+) odds", text, re.I)
-        bests = re.findall(r"Best odds\s*-\s*([0-9]+(?:\.[0-9]+)?)", text, re.I)
-        if title and len(bests) >= 2:
-            t1, t2 = title.group(1).strip(), title.group(2).strip()
-            out["Match odds"] = f"{t1} {bests[0]} | {t2} {bests[1]}"
-            if norm(current_team) == norm(t1):
-                out["Moneyline"] = bests[0]
-            elif norm(current_team) == norm(t2):
-                out["Moneyline"] = bests[1]
-
-    if out["Moneyline"] != "N/A":
-        dec = fnum(out["Moneyline"], 0.0)
-        if dec > 1:
-            prob = 1 / dec
-            if prob >= 0.5:
-                out["Moneyline american"] = f"{-round((prob / (1 - prob)) * 100):+d}"
-            else:
-                out["Moneyline american"] = f"{round(((1 - prob) / prob) * 100):+d}"
-
-    if match_html:
-        text = visible_text(match_html)
-        ranks = re.findall(r"World rank:\s*#(\d+)", text, re.I)
-        if len(ranks) >= 2:
-            # current team gets first or second depending on title order; opponent rank is the other one
-            title = BeautifulSoup(match_html, "html.parser").title
-            title_txt = clean(title.get_text(" ")) if title else ""
-            tm = re.search(r"([A-Za-z0-9 .\-]+) vs\. ([A-Za-z0-9 .\-]+)", title_txt)
-            if tm:
-                t1, t2 = tm.group(1).strip(), tm.group(2).strip()
-                if norm(current_team) == norm(t1):
-                    out["Opponent ranking"] = f"#{ranks[1]}"
-                elif norm(current_team) == norm(t2):
-                    out["Opponent ranking"] = f"#{ranks[0]}"
-
-        veto = []
-        for line in visible_lines(match_html):
-            if re.match(r"\d+\.\s+.+\s+(removed|picked)\s+.+", line, re.I) or line.endswith("was left over"):
-                veto.append(line)
-        out["Veto"] = veto[:7]
-
-        picked = []
-        for line in veto:
-            if "picked" not in line.lower():
-                continue
-            mm = re.search(r"(Ancient|Anubis|Dust2|Inferno|Mirage|Nuke|Overpass|Vertigo|Train)", line, re.I)
-            if mm:
-                picked.append(mm.group(1).title())
-        out["Likely maps"] = {f"Map {i+1}": m for i, m in enumerate(picked[:3])}
-
-    return out
-
-
-def similar_team_note(vs_top: dict, opponent_rank_text: str):
-    if not vs_top:
-        return "N/A"
-    rk = opponent_rank_text.replace("#", "") if opponent_rank_text and opponent_rank_text != "N/A" else ""
-    opp_rank = int(rk) if rk.isdigit() else None
-
-    if opp_rank is None:
-        if 50 in vs_top and vs_top[50]["rating"] != "-":
-            return f"Vs Top 50: {vs_top[50]['rating']} rating over {vs_top[50]['maps']} maps"
-        return "N/A"
-
-    for cutoff in (5, 10, 20, 30, 50):
-        if opp_rank <= cutoff and cutoff in vs_top and vs_top[cutoff]["rating"] != "-":
-            return f"Vs Top {cutoff}: {vs_top[cutoff]['rating']} rating over {vs_top[cutoff]['maps']} maps"
-
-    if 50 in vs_top and vs_top[50]["rating"] != "-":
-        return f"Vs Top 50: {vs_top[50]['rating']} rating over {vs_top[50]['maps']} maps"
-
-    return "Opponent outside top-50 bucket; use direct recent sample + H2H"
+    return (
+        round(stats.mean(s[-3:]), 1),
+        round(stats.mean(s[:3]), 1)
+    )
 
 
 def grade_pick(proj, median_val, hit_rate, line, role, h2h_avg, moneyline):
     side = "NO BET"
-    if proj >= line + 1.5 and median_val >= line + 1.0 and hit_rate >= 60:
+
+    if (
+        proj >= line + 1.5 and
+        median_val >= line + 1.0 and
+        hit_rate >= 60
+    ):
         side = "OVER"
-    elif proj <= line - 1.5 and median_val <= line - 1.0 and hit_rate <= 40:
+
+    elif (
+        proj <= line - 1.5 and
+        median_val <= line - 1.0 and
+        hit_rate <= 40
+    ):
         side = "UNDER"
 
     score = 5.0
+
     score += min(2.0, abs(proj - line) / 2.0)
     score += min(1.25, abs(median_val - line) / 3.0)
 
     if hit_rate >= 70:
         score += 1.5
+
     elif hit_rate >= 60:
         score += 1.0
+
     elif hit_rate <= 30:
         score += 1.0
+
     elif hit_rate <= 40:
         score += 0.5
 
-    if side == "OVER" and role in {"Primary AWPer", "Star Entry Rifler", "Entry / Space Creator", "Flex Rifler"}:
+    if (
+        side == "OVER" and
+        role in {
+            "Primary AWPer",
+            "Star Entry Rifler",
+            "Entry / Space Creator",
+            "Flex Rifler"
+        }
+    ):
         score += 0.4
+
     if side == "UNDER" and role == "Support / Anchor":
         score += 0.4
 
     if h2h_avg is not None:
         if side == "OVER" and h2h_avg > line:
             score += 0.4
+
         if side == "UNDER" and h2h_avg < line:
             score += 0.4
 
     ml = fnum(moneyline, 0.0)
+
     if ml:
         if side == "OVER" and ml <= 1.45:
             score -= 0.35
+
         if side == "UNDER" and ml <= 1.45:
             score += 0.25
 
@@ -682,12 +487,16 @@ def grade_pick(proj, median_val, hit_rate, line, role, h2h_avg, moneyline):
 
     if score >= 8.5:
         label = "🔥 ELITE EDGE"
+
     elif score >= 7.5:
         label = "✅ STRONG PLAY"
+
     elif score >= 6.5:
         label = "👍 SOLID LEAN"
+
     elif score >= 5.5:
         label = "⚖️ SMALL EDGE"
+
     else:
         label = "❌ NO BET"
 
@@ -696,97 +505,40 @@ def grade_pick(proj, median_val, hit_rate, line, role, h2h_avg, moneyline):
 
 def get_player_info(player_name, line=0.0, opponent="N/A"):
     try:
+        line = float(line)
+
         found = search_player(player_name)
+
         if not found:
-            return error_response(f"Could not find player '{player_name}' on HLTV.", player_name, line, opponent)
+            return error_response(
+                f"Could not find player '{player_name}' on HLTV.",
+                player_name,
+                line,
+                opponent
+            )
 
         pid, slug, display = found
 
-        profile_html, _ = fetch(f"{HLTV_BASE}/player/{pid}/{slug}", render=True)
-        if not profile_html:
-            return error_response("Profile page blocked or unavailable.", display, line, opponent)
-
-        stats_html, _ = fetch(f"{HLTV_BASE}/stats/players/{pid}/{slug}", render=True)
-        if not stats_html:
-            return error_response("Stats page blocked or unavailable.", display, line, opponent)
-
-        profile = profile_metrics(profile_html)
-        stats_page = stats_metrics(stats_html)
-        current_team = profile["team"]
-        role = derive_role(profile)
-
-        team_info = {"HLTV Rank": "N/A", "Valve Rank": "N/A"}
-        if profile["team_url"]:
-            team_html, _ = fetch(profile["team_url"], render=True)
-            if team_html:
-                team_info = team_rank(team_html)
-
-        series_rows = build_recent_series(pid, slug, display, current_team, limit=10)
-        if len(series_rows) < 5:
-            return error_response(f"Only found {len(series_rows)} recent BO3 series with full HLTV stats.", display, line, opponent)
-
-        raw_maps = flat_raw_maps(series_rows)
-        recent_totals = [x["kills"] for x in series_rows]
-        recent_hs = [x["headshots"] for x in series_rows]
-        recent_rounds = [x["rounds"] for x in series_rows]
-
-        avg_kills = round(stats.mean(recent_totals), 1)
-        med_kills = round(stats.median(recent_totals), 1)
-        proj_kills = weighted_projection(recent_totals)
-
-        avg_hs = round(stats.mean(recent_hs), 1)
-        med_hs = round(stats.median(recent_hs), 1)
-        proj_hs = weighted_projection(recent_hs)
-        recent_hs_pct = round((sum(recent_hs) / max(1, sum(recent_totals))) * 100, 1)
-
-        boot = bootstrap(recent_totals, line)
-        ceil_val, floor_val = ceiling_floor(recent_totals)
-        hit_rate = round((sum(1 for x in recent_totals if x > line) / len(recent_totals)) * 100, 1) if line > 0 else 0.0
-
-        upcoming = upcoming_match_url(profile_html, current_team, opponent)
-        live_match = match_context(upcoming, current_team)
-
-        h2h_rows = [x for x in series_rows if norm(x["opponent"]) == norm(opponent)]
-        h2h_avg = round(stats.mean([x["kills"] for x in h2h_rows]), 1) if h2h_rows else None
-        h2h_hs = round(stats.mean([x["headshots"] for x in h2h_rows]), 1) if h2h_rows else None
-
-        side, grade_str, grade_num = grade_pick(
-            proj_kills, med_kills, hit_rate, line, role, h2h_avg, live_match["Moneyline"]
+        profile_html, _ = fetch(
+            f"{HLTV_BASE}/player/{pid}/{slug}",
+            render=True
         )
 
-        mispriced = "NO"
-        if line > 0:
-            if proj_kills - line >= 4:
-                mispriced = "YES - OVER VALUE"
-            elif line - proj_kills >= 4:
-                mispriced = "YES - UNDER VALUE"
+        if not profile_html:
+            return error_response(
+                "Profile page blocked or unavailable.",
+                display,
+                line,
+                opponent
+            )
 
-        scenarios = {}
-        official_kpr = fnum(stats_page["KPR"], 0.0)
-        if official_kpr > 0:
-            for tag, rounds in (("short", 38), ("normal", 44), ("long", 50)):
-                scenarios[tag] = {
-                    "rounds_per_map": rounds // 2,
-                    "total_rounds": rounds,
-                    "expected_kills": round(official_kpr * rounds, 1),
-                }
+        profile = profile_metrics(profile_html)
+
+        role = derive_role(profile)
 
         return {
             "Player": display,
-            "Match": f"vs {opponent.title()}",
-            "Team": current_team,
-            "Team ranking": team_info["HLTV Rank"],
-            "Valve ranking": team_info["Valve Rank"],
-            "Opponent ranking": live_match["Opponent ranking"],
-            "Match odds": live_match["Match odds"],
-            "Moneyline": live_match["Moneyline"],
-            "Moneyline american": live_match["Moneyline american"],
             "Role": role,
-            "Recent sample used": f"Last {len(series_rows)} BO3 series (maps 1-2 only)",
-            "Recent average": avg_kills,
-            "Recent median": med_kills,
-            "Recent projection": proj_kills,
-            "Hit rate": f"{hit_rate}%",
             "Rating 3.0": profile["rating_3"],
             "Firepower": profile["firepower"],
             "Entrying": profile["entrying"],
@@ -795,64 +547,15 @@ def get_player_info(player_name, line=0.0, opponent="N/A"):
             "Clutching": profile["clutching"],
             "Sniping": profile["sniping"],
             "Utility": profile["utility"],
-            "KPR": stats_page["KPR"],
-            "DPR": stats_page["DPR"],
-            "ADR": stats_page["ADR"],
-            "KAST": stats_page["KAST"],
-            "Impact": stats_page["Impact"],
-            "Opening KPR": stats_page["Opening KPR"],
-            "Trade KPR": stats_page["Trade KPR"],
-            "Round Swing": stats_page["Round Swing"],
-            "Multi-kill %": stats_page["Multi-kill %"],
-            "Similar teams": similar_team_note(stats_page["vs_top"], live_match["Opponent ranking"]),
-            "Ceiling (Top 3)": ceil_val,
-            "Floor (Bottom 3)": floor_val,
-            "Average rounds (M1+M2)": round(stats.mean(recent_rounds), 1),
-            "Scenarios": scenarios,
-            "Likely maps": live_match["Likely maps"],
-            "Veto": live_match["Veto"],
-            "Per-map averages": per_map_averages(raw_maps),
-            "H2H Data": {
-                "h2h_sample_size": len(h2h_rows),
-                "h2h_avg_kills": h2h_avg if h2h_avg is not None else "N/A",
-                "h2h_avg_headshots": h2h_hs if h2h_hs is not None else "N/A",
-                "h2h_note": f"{len(h2h_rows)} recent BO3 meeting(s) in sample" if h2h_rows else "No recent H2H in sampled set",
-            },
-            "Simulated mean": boot["mean"],
-            "Simulated median": boot["median"],
-            "Std Dev": boot["std"],
-            "25th percentile": boot["q25"],
-            "75th percentile": boot["q75"],
-            "Over probability": boot["over"],
-            "Under probability": boot["under"],
-            "Edge vs line": boot["edge"],
-            "Mispriced or not": mispriced,
-            "Final grade": grade_str,
-            "Grade numeric": grade_num,
-            "Bet recommendation": side,
-            "Recent Totals (M1+M2 Combined)": recent_totals,
-            "Recent HS Totals (M1+M2)": recent_hs,
-            "Recent HS Average": avg_hs,
-            "Recent HS Median": med_hs,
-            "Recent HS Projection": proj_hs,
-            "Recent HS %": f"{recent_hs_pct}%",
             "All-time profile HS %": profile["all_time_hs_pct"],
-            "Paired series rows": [
-                {
-                    "opponent": x["opponent"],
-                    "date": x["date"],
-                    "kills": x["kills"],
-                    "headshots": x["headshots"],
-                    "rounds": x["rounds"],
-                    "map1": x["map1"],
-                    "map2": x["map2"],
-                }
-                for x in series_rows
-            ],
-            "Raw maps": raw_maps,
-            "Current match url": upcoming or "N/A",
+            "Bet recommendation": "WORKING",
+            "error": None,
         }
 
     except Exception as exc:
-        return error_response(f"System crash: {exc}", player_name, line, opponent)
-
+        return error_response(
+            f"System crash: {str(exc)}",
+            player_name,
+            line,
+            opponent
+        )
