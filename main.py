@@ -149,26 +149,36 @@ def data_embed(data: Dict[str, Any], line: float, opponent: str) -> discord.Embe
 
     paired = []
     for row in data.get("Paired series rows", [])[:10]:
-        emoji = "🟢" if row["kills"] > line else "🔴"
+        # Use safe .get methods for nested paired data fallback structural integrity
+        row_opp = row.get("opponent", "Unknown")
+        row_kills = row.get("kills", 0)
+        emoji = "🟢" if row_kills > line else "🔴"
         paired.append(
-            f"{emoji} **{row['opponent']}** (`{row['date']}`) — "
-            f"{row['kills']}K {row['headshots']}HS {row['rounds']}R | "
-            f"{map_name(row['map1'])} + {map_name(row['map2'])}"
+            f"{emoji} **{row_opp}** (`{row.get('date', 'N/A')}`) — "
+            f"{row_kills}K {row.get('headshots', 0)}HS {row.get('rounds', 0)}R | "
+            f"{map_name(row.get('map1', 'N/A'))} + {map_name(row.get('map2', 'N/A'))}"
         )
 
     raw = []
     for row in data.get("Raw maps", [])[:20]:
+        # FIXED: Implemented .get() defaults to permanently bypass KeyError line breaks on parsing failures
+        r_map = map_name(row.get("map_name", "N/A"))
+        r_kills = str(row.get("kills", "N/A"))
+        r_deaths = str(row.get("deaths", "N/A"))
+        r_hs = str(row.get("headshots", "N/A"))
+        r_rounds = str(row.get("rounds", "N/A"))
+        r_opp = str(row.get("opponent", "UNK")).upper()[:12]
+        
         raw.append(
-            f"`{map_name(row['map_name']):<10} {str(row['kills']):>2}-{str(row['deaths']):<2} "
-            f"HS {str(row['headshots']):>3} R {str(row['rounds']):>3} vs {str(row['opponent']).upper()[:12]}`"
+            f"`{r_map:<10} {r_kills:>2}-{r_deaths:<2} HS {r_hs:>3} R {r_rounds:>3} vs {r_opp}`"
         )
 
     pmap = []
     for map_key, vals in list((data.get("Per-map averages") or {}).items())[:7]:
         pmap.append(
-            f"`{map_name(map_key):<10} {vals['avg_kills']}K • "
-            f"{vals['avg_hs']}HS • {vals['avg_kpr']} KPR • "
-            f"{vals['sample_size']} maps`"
+            f"`{map_name(map_key):<10} {vals.get('avg_kills', 'N/A')}K • "
+            f"{vals.get('avg_hs', 'N/A')}HS • {vals.get('avg_kpr', 'N/A')} KPR • "
+            f"{vals.get('sample_size', 0)} maps`"
         )
 
     embed.add_field(name="⭐ Exact paired series", value=trim_lines(paired), inline=False)
