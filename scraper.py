@@ -3,7 +3,7 @@ import re
 import time
 import math
 import functools
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from statistics import mean, median
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote_plus
@@ -71,6 +71,35 @@ STATIC_PLAYERS = {
     "sh1ro": ("16920", "sh1ro"),
     "szejn": ("17113", "szejn"),
 }
+
+ATTR_BUCKET_KEYS = (
+    "Firepower",
+    "Entrying",
+    "Trading",
+    "Opening",
+    "Clutching",
+    "Sniping",
+    "Utility",
+)
+
+MAP_NAMES = (
+    "Ancient",
+    "Anubis",
+    "Cache",
+    "Cobblestone",
+    "Dust2",
+    "Inferno",
+    "Mirage",
+    "Nuke",
+    "Overpass",
+    "Season",
+    "Train",
+    "Tuscan",
+    "Vertigo",
+)
+
+TEAM_MAP_WINDOW_DAYS = 90
+H2H_WINDOW_DAYS = 90
 
 
 def _norm(value: Any) -> str:
@@ -240,6 +269,171 @@ def _value_before(
     return None
 
 
+
+def _parse_hltv_date(value: Any) -> Optional[date]:
+    raw = _norm(value)
+    if not raw:
+        return None
+    for fmt in ("%d/%m/%y", "%Y-%m-%d", "%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(raw, fmt).date()
+        except Exception:
+            continue
+    return None
+
+
+def _within_days(value: Any, max_age_days: int) -> bool:
+    parsed = _parse_hltv_date(value)
+    if not parsed:
+        return False
+    return (date.today() - parsed).days <= max_age_days
+
+
+def _team_name_matches(left: str, right: str) -> bool:
+    l_key = _slugify(str(left or ""))
+    r_key = _slugify(str(right or ""))
+    if not l_key or not r_key:
+        return False
+    return l_key == r_key or l_key in r_key or r_key in l_key
+
+
+def _strip_score_suffix(value: str) -> str:
+    return _norm(re.sub(r"\(\d+\)$", "", _norm(value))).strip()
+
+
+def _extract_first_match(line: str, pattern: str) -> Optional[str]:
+    m = re.search(pattern, str(line or ""), flags=re.I | re.S)
+    if not m:
+        return None
+    return _norm(m.group(1) if m.groups() else m.group(0))
+
+
+def _value_near(
+    lines: List[str],
+    label: str,
+    pattern: str,
+    occurrence: int = 1,
+    window: int = 8,
+    exact: bool = True,
+) -> Optional[str]:
+    hits = _find_line_indices(lines, label, exact=exact)
+    if len(hits) < occurrence:
+        return None
+    idx = hits[occurrence - 1]
+    rx = re.compile(pattern, flags=re.I)
+    for j in range(max(0, idx - window), min(len(lines), idx + window + 1)):
+        m = rx.search(lines[j])
+        if m:
+            return _norm(m.group(1) if m.groups() else m.group(0))
+    return None
+
+
+def _extract_bucket_scores(lines: List[str]) -> Dict[str, str]:
+    buckets: Dict[str, str] = {}
+    for label in ATTR_BUCKET_KEYS:
+        buckets[label] = _value_near(lines, label, r"(\d{1,3}/100)", window=6, exact=True) or "N/A"
+    return buckets
+
+
+def _extract_team_link(anchor: Any) -> Optional[Dict[str, str]]:
+    if anchor is None:
+        return None
+    href = anchor.get("href", "") if hasattr(anchor, "get") else ""
+    text = _norm(anchor.get_text(" ", strip=True)) if hasattr(anchor, "get_text") else ""
+    m = re.search(r"/team/(\d+)/([^/?#]+)", href)
+    if not (m and text):
+        return None
+    return {"id": m.group(1), "slug": m.group(2), "name": text, "url": _abs_url(href)}
+
+
+def _extract_team_links_from_soup(soup: Optional[BeautifulSoup], limit: int = 12) -> List[Dict[str, str]]:
+    if not soup:
+        return []
+    teams: List[Dict[str, str]] = []
+    seen = set()
+    for a in soup.find_all("a", href=True):
+        info = _extract_team_link(a)
+        if not info:
+            continue
+        key = (info["id"], _slugify(info["name"]))
+        if key in seen:
+            continue
+        seen.add(key)
+        teams.append(info)
+        if len(teams) >= limit:
+            break
+    return teams
+
+
+def _resolve_match_teams(team_links: List[Dict[str, str]], player_team: str, opponent: str) -> Tuple[Optional[Dict[str, str]], Optional[Dict[str, str]]]:
+    player_entry = next((x for x in team_links if _team_name_matches(x.get("name", ""), player_team)), None)
+    opponent_entry = next((x for x in team_links if _team_name_matches(x.get("name", ""), opponent) and (not player_entry or x.get("id") != player_entry.get("id"))), None)
+    if player_entry and not opponent_entry:
+        opponent_entry = next((x for x in team_links if x.get("id") != player_entry.get("id")), None)
+    if opponent_entry and not player_entry:
+        player_entry = next((x for x in team_links if x.get("id") != opponent_entry.get("id")), None)
+    if not player_entry and team_links:
+        player_entry = team_links[0]
+    if not opponent_entry and len(team_links) > 1:
+        opponent_entry = next((x for x in team_links if x.get("id") != (player_entry or {}).get("id")), team_links[1])
+    return player_entry, opponent_entry
+
+
+def _parse_pick_line(value: str) -> Dict[str, float]:
+    out: Dict[str, float] = {}
+    if not value or value == "N/A":
+        return out
+    for chunk in str(value).split("|"):
+        part = _norm(chunk)
+        m = re.match(r"(.+?)\s+(\d+(?:\.\d+)?)%$", part)
+        if m:
+            out[_norm(m.group(1))] = float(m.group(2))
+    return out
+
+
+def _parse_odds_line(value: str) -> Dict[str, float]:
+    out: Dict[str, float] = {}
+    if not value or value == "N/A":
+        return out
+    for chunk in str(value).split("|"):
+        part = _norm(chunk)
+        m = re.match(r"(.+?)\s+([0-9]+\.[0-9]+)$", part)
+        if m:
+            out[_norm(m.group(1))] = float(m.group(2))
+    return out
+
+
+def _safe_pct_value(value: Any) -> Optional[float]:
+    try:
+        return float(str(value).replace("%", "").replace("+", "").replace("/100", "").strip())
+    except Exception:
+        return None
+
+
+def _safe_rank_value(value: Any) -> Optional[int]:
+    try:
+        return int(str(value).replace("#", "").strip())
+    except Exception:
+        return None
+
+
+def _extract_map_names_from_text(value: Any) -> List[str]:
+    if not value:
+        return []
+    raw = str(value)
+    hits: List[str] = []
+    for map_name in MAP_NAMES:
+        if map_name.lower() in raw.lower() and map_name not in hits:
+            hits.append(map_name)
+    return hits[:3]
+
+
+def _series_stat_average(rows: List[Dict[str, Any]], field: str) -> Optional[float]:
+    values = [float(row.get(field, 0) or 0) for row in rows if row.get(field) is not None]
+    if not values:
+        return None
+    return round(mean(values), 2)
+
 def _profile_bucket_role(buckets: Dict[str, str]) -> Tuple[str, str]:
     scores: Dict[str, float] = {}
     for key, value in buckets.items():
@@ -319,6 +513,8 @@ def fetch_player_profile(pid: str, slug: str) -> Dict[str, Any]:
         return {
             "display_name": slug,
             "team_name": "N/A",
+            "team_id": None,
+            "team_slug": None,
             "team_ranking": "N/A",
             "rating_3": "N/A",
             "profile_buckets": {},
@@ -326,37 +522,30 @@ def fetch_player_profile(pid: str, slug: str) -> Dict[str, Any]:
         }
 
     lines = _lines_from_soup(soup)
-
     display_name = slug
-    for idx, line in enumerate(lines):
+    for line in lines:
         if line.startswith("# "):
             display_name = _norm(line.replace("# ", "", 1))
             break
 
     team_name = "N/A"
+    team_id = None
+    team_slug = None
     marker = soup.find(string=re.compile(r"Current team", re.I))
     if marker is not None:
         try:
             team_link = marker.parent.find_next("a", href=re.compile(r"/team/"))
         except Exception:
             team_link = None
-        if team_link is not None:
-            txt = _norm(team_link.get_text(" ", strip=True))
-            if txt:
-                team_name = txt
+        info = _extract_team_link(team_link)
+        if info:
+            team_name = info["name"]
+            team_id = info["id"]
+            team_slug = info["slug"]
 
     current_rank = _value_after(lines, "Current ranking", r"#?\d+", lookahead=4)
-    rating_3 = _value_after(lines, "Rating 3.0", r"\d+\.\d+", lookahead=4) or "N/A"
-
-    buckets = {
-        "Firepower": _value_after(lines, "Firepower", r"\d{1,3}/100", lookahead=5) or "N/A",
-        "Entrying": _value_after(lines, "Entrying", r"\d{1,3}/100", lookahead=5) or "N/A",
-        "Trading": _value_after(lines, "Trading", r"\d{1,3}/100", lookahead=5) or "N/A",
-        "Opening": _value_after(lines, "Opening", r"\d{1,3}/100", lookahead=5) or "N/A",
-        "Clutching": _value_after(lines, "Clutching", r"\d{1,3}/100", lookahead=5) or "N/A",
-        "Sniping": _value_after(lines, "Sniping", r"\d{1,3}/100", lookahead=5) or "N/A",
-        "Utility": _value_after(lines, "Utility", r"\d{1,3}/100", lookahead=5) or "N/A",
-    }
+    rating_3 = (_value_after(lines, "Rating 3.0", r"\d+\.\d+", lookahead=4) or _value_near(lines, "Rating 3.0", r"(\d+\.\d+)", window=4, exact=True) or "N/A")
+    buckets = _extract_bucket_scores(lines)
 
     match_links: List[Tuple[str, str]] = []
     seen = set()
@@ -368,18 +557,19 @@ def fetch_player_profile(pid: str, slug: str) -> Dict[str, Any]:
             if full not in seen:
                 seen.add(full)
                 match_links.append((text, full))
-        if len(match_links) >= 12:
+        if len(match_links) >= 20:
             break
 
     return {
         "display_name": display_name,
         "team_name": team_name,
+        "team_id": team_id,
+        "team_slug": team_slug,
         "team_ranking": _fmt_rank(int(current_rank.replace("#", ""))) if current_rank else "N/A",
         "rating_3": rating_3,
         "profile_buckets": buckets,
         "match_links": match_links,
     }
-
 
 def _build_stats_url(pid: str, slug: str, start_date: Optional[str] = None, end_date: Optional[str] = None) -> str:
     url = f"{HLTV_BASE}/stats/players/{pid}/{slug}"
@@ -394,77 +584,77 @@ def _build_stats_url(pid: str, slug: str, start_date: Optional[str] = None, end_
 def fetch_player_stats(pid: str, slug: str, start_date: Optional[str] = None, end_date: Optional[str] = None) -> Dict[str, str]:
     soup, _, _ = _get_soup(_build_stats_url(pid, slug, start_date, end_date), render=False)
     if not soup:
+        soup, _, _ = _get_soup(_build_stats_url(pid, slug, start_date, end_date), render=True)
+    if not soup:
         return {}
 
     lines = _lines_from_soup(soup)
     text = "\n".join(lines)
     stats: Dict[str, str] = {}
-
-    stats["Rating 2.0"] = _value_before(lines, "Rating 2.0", r"\d+\.\d+", lookback=4) or "N/A"
-    stats["Rating 3.0 recent"] = _value_before(lines, "Rating 3.0", r"\d+\.\d+", lookback=4) or "N/A"
-    stats["Round swing"] = _value_before(lines, "Round swing", r"[+-]?\d+\.\d+%", lookback=4) or "N/A"
-    stats["KAST"] = _value_before(lines, "KAST", r"\d+\.\d+%", lookback=4) or "N/A"
-    stats["ADR"] = _value_before(lines, "ADR", r"\d+\.\d+", lookback=4) or "N/A"
-    stats["KPR"] = _value_before(lines, "KPR", r"\d+\.\d+", lookback=4) or "N/A"
-    stats["DPR"] = _value_before(lines, "DPR", r"\d+\.\d+", lookback=4) or "N/A"
-
-    if stats["Round swing"] == "N/A":
-        m = re.search(r"([+-]?\d+\.\d+%)\s+Round swing", text, flags=re.I)
-        if m:
-            stats["Round swing"] = m.group(1)
-
-    stats["HS %"] = _value_after(lines, "Headshot %", r"\d+(?:\.\d+)?%", lookahead=2) or "N/A"
-    stats["Impact"] = _value_after(lines, "Impact rating", r"\d+\.\d+", lookahead=3) or "N/A"
-    stats["Opening kills per round"] = _value_after(lines, "Opening kills per round", r"\d+\.\d+", lookahead=3) or "N/A"
-    stats["Trade kills per round"] = _value_after(lines, "Trade kills per round", r"\d+\.\d+", lookahead=3) or "N/A"
-    stats["Maps played"] = _value_after(lines, "Maps played", r"[\d,]+", lookahead=2) or "N/A"
-    stats["Rounds played"] = _value_after(lines, "Rounds played", r"[\d,]+", lookahead=2) or "N/A"
-
-    for label in ("Firepower", "Entrying", "Trading", "Opening", "Clutching", "Sniping", "Utility"):
-        stats[label] = _value_after(lines, label, r"\d{1,3}/100", lookahead=4) or "N/A"
-
+    stats["Rating 2.0"] = _value_before(lines, "Rating 2.0", r"\d+\.\d+", lookback=4) or _value_near(lines, "Rating 2.0", r"(\d+\.\d+)", window=4, exact=True) or "N/A"
+    stats["Rating 3.0 recent"] = _value_before(lines, "Rating 3.0", r"\d+\.\d+", lookback=4) or _value_near(lines, "Rating 3.0", r"(\d+\.\d+)", window=4, exact=True) or "N/A"
+    stats["Round swing"] = _value_near(lines, "Round swing", r"([+-]?\d+\.\d+%)", window=6, exact=True) or _extract_first_match(text, r"Round swing(?:.|\n){0,120}?([+-]?\d+\.\d+%)") or _extract_first_match(text, r"([+-]?\d+\.\d+%)\s+Round swing") or "N/A"
+    stats["KAST"] = _value_near(lines, "KAST", r"(\d+\.\d+%)", window=6, exact=True) or _extract_first_match(text, r"KAST(?:.|\n){0,120}?(\d+\.\d+%)") or _extract_first_match(text, r"(\d+\.\d+%)\s+KAST") or "N/A"
+    stats["ADR"] = _value_near(lines, "ADR", r"(\d+\.\d+)", window=5, exact=True) or _extract_first_match(text, r"ADR(?:.|\n){0,80}?(\d+\.\d+)") or "N/A"
+    stats["KPR"] = _value_near(lines, "KPR", r"(\d+\.\d+)", window=5, exact=True) or _extract_first_match(text, r"KPR(?:.|\n){0,80}?(\d+\.\d+)") or "N/A"
+    stats["DPR"] = _value_near(lines, "DPR", r"(\d+\.\d+)", window=5, exact=True) or _extract_first_match(text, r"DPR(?:.|\n){0,80}?(\d+\.\d+)") or "N/A"
+    stats["HS %"] = _value_near(lines, "Headshot %", r"(\d+(?:\.\d+)?%)", window=4, exact=False) or _extract_first_match(text, r"Headshot %\s*([0-9]+(?:\.[0-9]+)?%)") or "N/A"
+    stats["Impact"] = _value_near(lines, "Impact rating", r"(\d+\.\d+)", window=5, exact=False) or _extract_first_match(text, r"Impact rating\s*([0-9]+\.[0-9]+)") or "N/A"
+    stats["Opening kills per round"] = _value_near(lines, "Opening kills per round", r"(\d+\.\d+)", window=5, exact=True) or _extract_first_match(text, r"Opening kills per round(?:.|\n){0,40}?([0-9]+\.[0-9]+)") or "N/A"
+    stats["Trade kills per round"] = _value_near(lines, "Trade kills per round", r"(\d+\.\d+)", window=5, exact=True) or _extract_first_match(text, r"Trade kills per round(?:.|\n){0,40}?([0-9]+\.[0-9]+)") or "N/A"
+    stats["Maps played"] = _value_near(lines, "Maps played", r"([\d,]+)", window=4, exact=False) or _extract_first_match(text, r"Maps played\s*([\d,]+)") or "N/A"
+    stats["Rounds played"] = _value_near(lines, "Rounds played", r"([\d,]+)", window=4, exact=False) or _extract_first_match(text, r"Rounds played\s*([\d,]+)") or "N/A"
+    for label in ATTR_BUCKET_KEYS:
+        stats[label] = _value_near(lines, label, r"(\d{1,3}/100)", window=6, exact=True) or "N/A"
     for bucket in (5, 10, 20, 30, 50):
         label = f"vs top {bucket} opponents"
-        stats[f"Vs Top {bucket} rating"] = _value_after(lines, label, r"-|\d+\.\d+", lookahead=8) or "N/A"
-
+        stats[f"Vs Top {bucket} rating"] = _value_near(lines, label, r"(-|\d+\.\d+)", window=8, exact=False) or _extract_first_match(text, rf"vs top {bucket} opponents(?:.|\n){{0,80}}?(-|[0-9]+\.[0-9]+)") or "N/A"
     return stats
-
 
 def extract_history_rows(pid: str, slug: str) -> List[Dict[str, Any]]:
     soup, _, _ = _get_soup(f"{HLTV_BASE}/stats/players/matches/{pid}/{slug}", render=False)
     if not soup:
+        soup, _, _ = _get_soup(f"{HLTV_BASE}/stats/players/matches/{pid}/{slug}", render=True)
+    if not soup:
         return []
-
     table = soup.find("table")
     if not table or not table.find("tbody"):
         return []
-
     rows: List[Dict[str, Any]] = []
     for tr in table.find("tbody").find_all("tr"):
         row_text = _norm(tr.get_text(" ", strip=True))
         if not row_text:
             continue
-
         date_match = re.search(r"(\d{2}/\d{2}/\d{2})", row_text)
         kd_match = re.search(r"\b(\d+)\s*-\s*(\d+)\b", row_text)
         map_match = re.search(r"\b(anc|anb|d2|inf|mrg|nuke|ovp|vrt|trn|cbl|cch|tcn|ssn)\b", row_text, flags=re.I)
         if not (date_match and kd_match and map_match):
             continue
-
+        cells = [_norm(td.get_text(" ", strip=True)) for td in tr.find_all("td")]
         links = tr.find_all("a", href=True)
-        team_names: List[str] = []
+        team_links: List[Dict[str, str]] = []
         mapstats_url = ""
         match_url = ""
         for a in links:
             href = a.get("href", "")
-            txt = _norm(a.get_text(" ", strip=True))
             if "/stats/matches/mapstatsid/" in href and not mapstats_url:
                 mapstats_url = _abs_url(href)
             elif "/matches/" in href and not match_url:
                 match_url = _abs_url(href)
-            elif "/team/" in href and txt and txt not in team_names:
-                team_names.append(txt)
-
+            info = _extract_team_link(a)
+            if info and all(info.get("id") != existing.get("id") for existing in team_links):
+                team_links.append(info)
+        if len(team_links) >= 2:
+            team_name = team_links[0]["name"]
+            opponent_name = team_links[1]["name"]
+            team_id = team_links[0]["id"]
+            team_slug = team_links[0]["slug"]
+            opponent_id = team_links[1]["id"]
+            opponent_slug = team_links[1]["slug"]
+        else:
+            team_name = _strip_score_suffix(cells[1]) if len(cells) > 1 else "N/A"
+            opponent_name = _strip_score_suffix(cells[2]) if len(cells) > 2 else "UNK"
+            team_id = team_slug = opponent_id = opponent_slug = None
         score_bits = re.findall(r"\((\d+)\)", row_text)
         rounds_played = 24
         if len(score_bits) >= 2:
@@ -472,27 +662,12 @@ def extract_history_rows(pid: str, slug: str) -> List[Dict[str, Any]]:
                 rounds_played = int(score_bits[0]) + int(score_bits[1])
             except Exception:
                 pass
-
         rating_match = re.findall(r"\b(\d+\.\d+)\b", row_text)
         rating = rating_match[-1] if rating_match else "N/A"
-
-        rows.append({
-            "date": date_match.group(1),
-            "team": team_names[0] if team_names else "N/A",
-            "opponent": team_names[1] if len(team_names) > 1 else "UNK",
-            "map_name": MAP_ALIASES.get(map_match.group(1).lower(), map_match.group(1).lower()),
-            "kills": int(kd_match.group(1)),
-            "deaths": int(kd_match.group(2)),
-            "rating": rating,
-            "rounds": rounds_played,
-            "mapstats_url": mapstats_url,
-            "match_url": match_url,
-        })
+        rows.append({"date": date_match.group(1), "team": team_name or "N/A", "team_id": team_id, "team_slug": team_slug, "opponent": opponent_name or "UNK", "opponent_id": opponent_id, "opponent_slug": opponent_slug, "map_name": MAP_ALIASES.get(map_match.group(1).lower(), map_match.group(1).lower()), "kills": int(kd_match.group(1)), "deaths": int(kd_match.group(2)), "rating": rating, "rounds": rounds_played, "mapstats_url": mapstats_url, "match_url": match_url})
         if len(rows) >= MAX_RECENT_MAPS:
             break
-
     return rows
-
 
 def parse_mapstats(url: str, player_candidates: List[str]) -> Tuple[Optional[int], Optional[int]]:
     if not url:
@@ -527,10 +702,9 @@ def hydrate_maps(rows: List[Dict[str, Any]], slug: str, display_name: str) -> Li
     return out
 
 
-def pair_recent_series(rows: List[Dict[str, Any]], max_series: int = MAX_RECENT_SERIES) -> List[Dict[str, Any]]:
+def pair_recent_series(rows: List[Dict[str, Any]], max_series: Optional[int] = MAX_RECENT_SERIES) -> List[Dict[str, Any]]:
     if not rows:
         return []
-
     grouped: List[Dict[str, Any]] = []
     for row in rows:
         key = (_slugify(row.get("date", "")), _slugify(row.get("opponent", "")), _slugify(row.get("team", "")))
@@ -538,36 +712,16 @@ def pair_recent_series(rows: List[Dict[str, Any]], max_series: int = MAX_RECENT_
             grouped[-1]["maps"].append(row)
         else:
             grouped.append({"key": key, "maps": [row]})
-
     paired = []
     for grp in grouped:
-        chrono_maps = list(reversed(grp["maps"]))  # HLTV history is reverse chronological within a series
+        chrono_maps = list(reversed(grp["maps"]))
         if len(chrono_maps) < 2:
             continue
-
         first_two = chrono_maps[:2]
-        paired.append({
-            "date": first_two[0].get("date", "N/A"),
-            "team": first_two[0].get("team", "N/A"),
-            "opponent": first_two[0].get("opponent", "UNK"),
-            "map1": first_two[0].get("map_name", "N/A"),
-            "map2": first_two[1].get("map_name", "N/A"),
-            "kills": int(first_two[0].get("kills", 0)) + int(first_two[1].get("kills", 0)),
-            "deaths": int(first_two[0].get("deaths", 0)) + int(first_two[1].get("deaths", 0)),
-            "headshots": int(first_two[0].get("headshots", 0)) + int(first_two[1].get("headshots", 0)),
-            "rounds": int(first_two[0].get("rounds", 0)) + int(first_two[1].get("rounds", 0)),
-            "rating_avg": round(mean([
-                _safe_float(first_two[0].get("rating")) or 0.0,
-                _safe_float(first_two[1].get("rating")) or 0.0,
-            ]), 2),
-            "maps_in_series": len(chrono_maps),
-            "raw_maps": first_two,
-        })
-        if len(paired) >= max_series:
+        paired.append({"date": first_two[0].get("date", "N/A"), "team": first_two[0].get("team", "N/A"), "team_id": first_two[0].get("team_id"), "team_slug": first_two[0].get("team_slug"), "opponent": first_two[0].get("opponent", "UNK"), "opponent_id": first_two[0].get("opponent_id"), "opponent_slug": first_two[0].get("opponent_slug"), "map1": first_two[0].get("map_name", "N/A"), "map2": first_two[1].get("map_name", "N/A"), "kills": int(first_two[0].get("kills", 0)) + int(first_two[1].get("kills", 0)), "deaths": int(first_two[0].get("deaths", 0)) + int(first_two[1].get("deaths", 0)), "headshots": int(first_two[0].get("headshots", 0)) + int(first_two[1].get("headshots", 0)), "rounds": int(first_two[0].get("rounds", 0)) + int(first_two[1].get("rounds", 0)), "rating_avg": round(mean([_safe_float(first_two[0].get("rating")) or 0.0, _safe_float(first_two[1].get("rating")) or 0.0]), 2), "maps_in_series": len(chrono_maps), "raw_maps": first_two})
+        if max_series is not None and len(paired) >= max_series:
             break
-
     return paired
-
 
 def build_per_map_averages(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     buckets: Dict[str, List[Dict[str, Any]]] = {}
@@ -706,27 +860,22 @@ def _recent_form_string(series_rows: List[Dict[str, Any]]) -> str:
     return f"Last 5 series: {avg5:.1f} K / {hs5:.1f} HS • Last {len(last10)} series: {avg10:.1f} K"
 
 
-def _h2h_payload(series_rows: List[Dict[str, Any]], opponent: str) -> Dict[str, Any]:
+def _h2h_payload(series_rows: List[Dict[str, Any]], opponent: str, max_age_days: int = H2H_WINDOW_DAYS) -> Dict[str, Any]:
     opp_key = _slugify(opponent)
     if not opp_key:
         return {}
-    relevant = [row for row in series_rows if _slugify(str(row.get("opponent", ""))) == opp_key]
+    relevant = [row for row in series_rows if _team_name_matches(str(row.get("opponent", "")), opponent) and _within_days(row.get("date"), max_age_days)]
     if not relevant:
-        return {"h2h_sample_size": 0, "h2h_avg_kills": "N/A", "h2h_avg_headshots": "N/A"}
-    return {
-        "h2h_sample_size": len(relevant),
-        "h2h_avg_kills": round(mean(int(x.get("kills", 0)) for x in relevant), 2),
-        "h2h_avg_headshots": round(mean(int(x.get("headshots", 0)) for x in relevant), 2),
-    }
-
+        return {"h2h_sample_size": 0, "h2h_avg_kills": "N/A", "h2h_avg_headshots": "N/A", "h2h_rows": [], "h2h_summary": f"No HLTV H2H sample in the last {max_age_days} days."}
+    avg_k = _series_stat_average(relevant, "kills")
+    avg_hs = _series_stat_average(relevant, "headshots")
+    return {"h2h_sample_size": len(relevant), "h2h_avg_kills": avg_k if avg_k is not None else "N/A", "h2h_avg_headshots": avg_hs if avg_hs is not None else "N/A", "h2h_last_meeting": relevant[0].get("date", "N/A"), "h2h_rows": relevant[:5], "h2h_summary": f"{len(relevant)} HLTV series in last {max_age_days}d • {avg_k if avg_k is not None else 'N/A'} kills • {avg_hs if avg_hs is not None else 'N/A'} HS"}
 
 def _find_profile_match_url(match_links: List[Tuple[str, str]], opponent: str) -> Optional[str]:
-    opp_key = _slugify(opponent)
     for text, url in match_links:
-        if opp_key and opp_key in _slugify(text):
+        if _team_name_matches(text, opponent):
             return url
     return None
-
 
 def _team_names_from_match_soup(soup: BeautifulSoup) -> List[str]:
     teams: List[str] = []
@@ -767,56 +916,42 @@ def _extract_pick_percentages(lines: List[str], teams: List[str]) -> Optional[st
 
 
 def _extract_veto_and_maps(lines: List[str]) -> Tuple[List[str], Dict[str, str]]:
-    veto = [line for line in lines if re.match(r"\d+\.\s", line)]
+    veto = [line for line in lines if re.search(r"(picked|removed|was left over)", line, flags=re.I) and (re.match(r"\d+\.\s*", line) or " picked " in line.lower() or " removed " in line.lower() or " was left over" in line.lower())]
     likely: Dict[str, str] = {}
     picks = []
     decider = None
-
     for line in veto:
-        pm = re.match(r"\d+\.\s+(.+?)\s+picked\s+(.+)", line, flags=re.I)
+        pm = re.search(r"(.+?)\s+picked\s+(.+)", line, flags=re.I)
         if pm:
-            picks.append(_norm(pm.group(2)))
-        dm = re.match(r"\d+\.\s+(.+?)\s+was left over", line, flags=re.I)
+            picks.append((_norm(pm.group(1)), _norm(pm.group(2))))
+        dm = re.search(r"(.+?)\s+was left over", line, flags=re.I)
         if dm:
             decider = _norm(dm.group(1))
-
     if picks:
-        if len(picks) >= 1:
-            likely["Map 1"] = picks[0]
-        if len(picks) >= 2:
-            likely["Map 2"] = picks[1]
+        for team_name, map_name in picks[:2]:
+            likely[f"{team_name} pick"] = map_name
     if decider:
         likely["Decider"] = decider
-
     return veto, likely
-
 
 def _extract_decimal_odds_from_html(html: str, teams: List[str]) -> Tuple[Optional[float], Optional[float], Optional[str]]:
     if not html:
         return None, None, None
-
-    patterns = [
-        r'"team1Odds"\s*:\s*"?([0-9]+\.[0-9]+)"?.{0,200}?"team2Odds"\s*:\s*"?([0-9]+\.[0-9]+)"?',
-        r'"homeOdds"\s*:\s*"?([0-9]+\.[0-9]+)"?.{0,200}?"awayOdds"\s*:\s*"?([0-9]+\.[0-9]+)"?',
-        r'data-team1-odds="([0-9]+\.[0-9]+)".{0,200}?data-team2-odds="([0-9]+\.[0-9]+)"',
-        r'data-odds1="([0-9]+\.[0-9]+)".{0,200}?data-odds2="([0-9]+\.[0-9]+)"',
-    ]
+    thunder_patterns = [r'Thunderpick.{0,240}?"team1Odds"\s*:\s*"?([0-9]+\.[0-9]+)"?.{0,180}?"team2Odds"\s*:\s*"?([0-9]+\.[0-9]+)"?', r'"bookie"\s*:\s*"Thunderpick".{0,240}?"homeOdds"\s*:\s*"?([0-9]+\.[0-9]+)"?.{0,180}?"awayOdds"\s*:\s*"?([0-9]+\.[0-9]+)"?', r'"name"\s*:\s*"Thunderpick".{0,240}?"odds1"\s*:\s*"?([0-9]+\.[0-9]+)"?.{0,180}?"odds2"\s*:\s*"?([0-9]+\.[0-9]+)"?']
+    for pat in thunder_patterns:
+        m = re.search(pat, html, flags=re.I | re.S)
+        if m:
+            return float(m.group(1)), float(m.group(2)), "Thunderpick"
+    patterns = [r'"team1Odds"\s*:\s*"?([0-9]+\.[0-9]+)"?.{0,200}?"team2Odds"\s*:\s*"?([0-9]+\.[0-9]+)"?', r'"homeOdds"\s*:\s*"?([0-9]+\.[0-9]+)"?.{0,200}?"awayOdds"\s*:\s*"?([0-9]+\.[0-9]+)"?', r'data-team1-odds="([0-9]+\.[0-9]+)".{0,200}?data-team2-odds="([0-9]+\.[0-9]+)"', r'data-odds1="([0-9]+\.[0-9]+)".{0,200}?data-odds2="([0-9]+\.[0-9]+)"']
     for pat in patterns:
         m = re.search(pat, html, flags=re.I | re.S)
         if m:
             return float(m.group(1)), float(m.group(2)), "html"
-
     if len(teams) >= 2:
-        m = re.search(
-            rf"{re.escape(teams[0])}.{{0,120}}?([0-9]+\.[0-9]+).{{0,120}}?{re.escape(teams[1])}.{{0,120}}?([0-9]+\.[0-9]+)",
-            html,
-            flags=re.I | re.S,
-        )
+        m = re.search(rf"{re.escape(teams[0])}.{{0,120}}?([0-9]+\.[0-9]+).{{0,120}}?{re.escape(teams[1])}.{{0,120}}?([0-9]+\.[0-9]+)", html, flags=re.I | re.S)
         if m:
             return float(m.group(1)), float(m.group(2)), "team-nearby"
-
     return None, None, None
-
 
 def _analytics_url_from_match(match_url: str) -> Optional[str]:
     m = re.search(r"/matches/(\d+)/(.*)$", match_url)
@@ -828,62 +963,246 @@ def _analytics_url_from_match(match_url: str) -> Optional[str]:
 def fetch_match_context(match_url: Optional[str], player_team: str, opponent: str) -> Dict[str, Any]:
     if not match_url:
         return {}
-
     soup, _, html = _get_soup(match_url, render=True)
     if not soup:
         soup, _, html = _get_soup(match_url, render=False)
     if not soup:
         return {}
-
     lines = _lines_from_soup(soup)
-    teams = _team_names_from_match_soup(soup)
-    veto, likely_maps = _extract_veto_and_maps(lines)
-
-    player_rank = _extract_team_rank_from_lines(lines, player_team)
-    opponent_rank = _extract_team_rank_from_lines(lines, opponent)
-
-    public_pick = _extract_pick_percentages(lines, teams)
-    odds_a, odds_b, odds_source = _extract_decimal_odds_from_html(html or "", teams)
-
+    team_links = _extract_team_links_from_soup(soup, limit=12)
+    player_entry, opponent_entry = _resolve_match_teams(team_links, player_team, opponent)
+    resolved_player_team = player_entry.get("name") if player_entry else player_team
+    resolved_opponent = opponent_entry.get("name") if opponent_entry else opponent
+    veto, official_likely_maps = _extract_veto_and_maps(lines)
+    player_rank = _extract_team_rank_from_lines(lines, resolved_player_team)
+    opponent_rank = _extract_team_rank_from_lines(lines, resolved_opponent)
+    teams_for_display = [x for x in [resolved_player_team, resolved_opponent] if x]
+    if len(teams_for_display) < 2:
+        teams_for_display = [x.get("name", "") for x in team_links[:2] if x.get("name")]
+    public_pick = _extract_pick_percentages(lines, teams_for_display)
+    odds_a, odds_b, odds_source = _extract_decimal_odds_from_html(html or "", teams_for_display)
     analytics_url = _analytics_url_from_match(match_url)
     if analytics_url:
         analytics_soup, _, analytics_html = _get_soup(analytics_url, render=True)
         if not analytics_soup:
             analytics_soup, _, analytics_html = _get_soup(analytics_url, render=False)
         analytics_lines = _lines_from_soup(analytics_soup) if analytics_soup else []
-
         if analytics_lines:
-            player_rank = player_rank or _extract_team_rank_from_lines(analytics_lines, player_team)
-            opponent_rank = opponent_rank or _extract_team_rank_from_lines(analytics_lines, opponent)
+            analytics_team_links = _extract_team_links_from_soup(analytics_soup, limit=12) if analytics_soup else []
+            if analytics_team_links:
+                team_links = analytics_team_links + [x for x in team_links if x.get("id") not in {y.get("id") for y in analytics_team_links}]
+                player_entry, opponent_entry = _resolve_match_teams(team_links, resolved_player_team, resolved_opponent)
+                resolved_player_team = player_entry.get("name") if player_entry else resolved_player_team
+                resolved_opponent = opponent_entry.get("name") if opponent_entry else resolved_opponent
+                teams_for_display = [x for x in [resolved_player_team, resolved_opponent] if x]
+            player_rank = player_rank or _extract_team_rank_from_lines(analytics_lines, resolved_player_team)
+            opponent_rank = opponent_rank or _extract_team_rank_from_lines(analytics_lines, resolved_opponent)
+            public_pick = public_pick or _extract_pick_percentages(analytics_lines, teams_for_display)
+            if not veto:
+                analytics_veto, analytics_likely = _extract_veto_and_maps(analytics_lines)
+                if analytics_veto:
+                    veto = analytics_veto; official_likely_maps = analytics_likely
         if (odds_a is None or odds_b is None) and analytics_html:
-            odds_a, odds_b, odds_source = _extract_decimal_odds_from_html(analytics_html, teams)
-
+            odds_a, odds_b, odds_source = _extract_decimal_odds_from_html(analytics_html, teams_for_display)
     odds_display = "N/A"
-    moneyline = None
-    moneyline_american = "N/A"
+    if odds_a and odds_b and len(teams_for_display) >= 2:
+        odds_display = f"{teams_for_display[0]} {odds_a:.2f} | {teams_for_display[1]} {odds_b:.2f}"
+    thunderpick_display = odds_display if odds_source in ("Thunderpick", "html", "team-nearby") else "N/A"
+    start_maps, end_maps = _today_range(TEAM_MAP_WINDOW_DAYS)
+    player_pool = fetch_team_map_stats(player_entry.get("id") if player_entry else None, player_entry.get("slug") if player_entry else None, start_date=start_maps, end_date=end_maps)
+    opponent_pool = fetch_team_map_stats(opponent_entry.get("id") if opponent_entry else None, opponent_entry.get("slug") if opponent_entry else None, start_date=start_maps, end_date=end_maps)
+    derived_likely_maps, veto_notes = build_likely_maps_from_pools(resolved_player_team, resolved_opponent, player_pool, opponent_pool, official_veto=veto)
+    likely_maps = dict(official_likely_maps or {})
+    for key, value in derived_likely_maps.items(): likely_maps.setdefault(key, value)
+    return {"Match URL": match_url, "Resolved team": resolved_player_team or player_team, "Resolved opponent": resolved_opponent or opponent, "Veto": veto if veto else veto_notes, "Likely maps": likely_maps, "Likely maps source": "Official HLTV veto" if official_likely_maps else f"Derived from last {TEAM_MAP_WINDOW_DAYS} days of HLTV team map data", "Team ranking": _fmt_rank(player_rank), "Opponent ranking": _fmt_rank(opponent_rank), "Match odds": odds_display, "Thunderpick odds": thunderpick_display, "Public pick": public_pick or "N/A", "Odds source": odds_source or "N/A", "Team map pool": player_pool, "Opponent map pool": opponent_pool, "Veto notes": veto_notes}
 
-    if odds_a and odds_b and len(teams) >= 2:
-        odds_display = f"{teams[0]} {odds_a:.2f} | {teams[1]} {odds_b:.2f}"
-        if _slugify(player_team) == _slugify(teams[0]):
-            moneyline = odds_a
-        elif _slugify(player_team) == _slugify(teams[1]):
-            moneyline = odds_b
-        if moneyline:
-            moneyline_american = _decimal_to_american(moneyline)
+def _build_team_maps_url(team_id: str, team_slug: str, start_date: Optional[str] = None, end_date: Optional[str] = None) -> str:
+    url = f"{HLTV_BASE}/stats/teams/maps/{team_id}/{team_slug}"
+    params = []
+    if start_date:
+        params.append(f"startDate={start_date}")
+    if end_date:
+        params.append(f"endDate={end_date}")
+    return url + ("?" + "&".join(params) if params else "")
 
-    return {
-        "Match URL": match_url,
-        "Veto": veto,
-        "Likely maps": likely_maps,
-        "Team ranking": _fmt_rank(player_rank),
-        "Opponent ranking": _fmt_rank(opponent_rank),
-        "Match odds": odds_display,
-        "Moneyline": f"{moneyline:.2f}" if moneyline else "N/A",
-        "Moneyline american": moneyline_american,
-        "Public pick": public_pick or "N/A",
-        "Odds source": odds_source or "N/A",
-    }
 
+def fetch_team_map_stats(team_id: Optional[str], team_slug: Optional[str], start_date: Optional[str] = None, end_date: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+    if not team_id or not team_slug:
+        return {}
+    soup, _, _ = _get_soup(_build_team_maps_url(team_id, team_slug, start_date, end_date), render=False)
+    if not soup:
+        soup, _, _ = _get_soup(_build_team_maps_url(team_id, team_slug, start_date, end_date), render=True)
+    if not soup:
+        return {}
+    lines = _lines_from_soup(soup)
+    data: Dict[str, Dict[str, Any]] = {}
+    for idx, line in enumerate(lines):
+        if line not in MAP_NAMES:
+            continue
+        block = lines[idx:idx + 18]
+        win_rate = pick_pct = ban_pct = None
+        for j, cur in enumerate(block):
+            if "Win rate" in cur:
+                win_rate = _extract_first_match(cur, r"Win rate\s*([0-9]+(?:\.[0-9]+)?%)") or (block[j + 1] if j + 1 < len(block) and re.fullmatch(r"[0-9]+(?:\.[0-9]+)?%", block[j + 1]) else None)
+            if "Pick %" in cur:
+                pick_pct = _extract_first_match(cur, r"Pick %\s*([0-9]+(?:\.[0-9]+)?%)") or (block[j + 1] if j + 1 < len(block) and re.fullmatch(r"[0-9]+(?:\.[0-9]+)?%", block[j + 1]) else None)
+            if "Ban %" in cur:
+                ban_pct = _extract_first_match(cur, r"Ban %\s*([0-9]+(?:\.[0-9]+)?%)") or (block[j + 1] if j + 1 < len(block) and re.fullmatch(r"[0-9]+(?:\.[0-9]+)?%", block[j + 1]) else None)
+        if win_rate or pick_pct or ban_pct:
+            data[line] = {"win_rate": win_rate or "N/A", "pick_pct": pick_pct or "N/A", "ban_pct": ban_pct or "N/A"}
+    return data
+
+
+def _best_map_by(pool: Dict[str, Dict[str, Any]], key: str, reverse: bool = True, exclude: Optional[List[str]] = None) -> Optional[Tuple[str, Dict[str, Any]]]:
+    exclude_keys = {_slugify(x) for x in (exclude or [])}
+    candidates = []
+    for map_name, vals in pool.items():
+        if _slugify(map_name) in exclude_keys:
+            continue
+        score = _safe_pct_value(vals.get(key))
+        if score is not None:
+            candidates.append((score, map_name, vals))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: x[0], reverse=reverse)
+    return candidates[0][1], candidates[0][2]
+
+
+def _best_shared_map(team_pool: Dict[str, Dict[str, Any]], opp_pool: Dict[str, Dict[str, Any]], exclude: Optional[List[str]] = None) -> Optional[Tuple[str, Dict[str, Any], Dict[str, Any]]]:
+    exclude_keys = {_slugify(x) for x in (exclude or [])}
+    best = None
+    best_score = None
+    for map_name, team_vals in team_pool.items():
+        if _slugify(map_name) in exclude_keys or map_name not in opp_pool:
+            continue
+        opp_vals = opp_pool[map_name]
+        team_pick = _safe_pct_value(team_vals.get("pick_pct")) or 0.0
+        opp_pick = _safe_pct_value(opp_vals.get("pick_pct")) or 0.0
+        team_ban = _safe_pct_value(team_vals.get("ban_pct")) or 100.0
+        opp_ban = _safe_pct_value(opp_vals.get("ban_pct")) or 100.0
+        score = min(team_pick, opp_pick) + (200.0 - team_ban - opp_ban)
+        if best_score is None or score > best_score:
+            best_score = score
+            best = (map_name, team_vals, opp_vals)
+    return best
+
+
+def build_likely_maps_from_pools(player_team_name: str, opponent_name: str, player_pool: Dict[str, Dict[str, Any]], opponent_pool: Dict[str, Dict[str, Any]], official_veto: Optional[List[str]] = None) -> Tuple[Dict[str, str], List[str]]:
+    likely: Dict[str, str] = {}
+    notes: List[str] = []
+    if official_veto:
+        notes.append("Official HLTV veto found for this match.")
+    if not player_pool or not opponent_pool:
+        if not notes:
+            notes.append("No official veto on HLTV and team map-pool data could not be resolved.")
+        return likely, notes
+    excluded: List[str] = []
+    team_ban = _best_map_by(player_pool, "ban_pct")
+    opp_ban = _best_map_by(opponent_pool, "ban_pct")
+    if team_ban:
+        excluded.append(team_ban[0]); notes.append(f"{player_team_name} permaban lean: {team_ban[0]} (ban {team_ban[1].get('ban_pct', 'N/A')}).")
+    if opp_ban:
+        excluded.append(opp_ban[0]); notes.append(f"{opponent_name} permaban lean: {opp_ban[0]} (ban {opp_ban[1].get('ban_pct', 'N/A')}).")
+    team_pick = _best_map_by(player_pool, "pick_pct", exclude=excluded)
+    if team_pick and team_pick[0] in opponent_pool:
+        o = opponent_pool[team_pick[0]]
+        likely[f"{player_team_name} likely pick"] = f"{team_pick[0]} (pick {team_pick[1].get('pick_pct', 'N/A')}, WR {team_pick[1].get('win_rate', 'N/A')} vs {opponent_name} WR {o.get('win_rate', 'N/A')})"
+        excluded.append(team_pick[0])
+    opp_pick = _best_map_by(opponent_pool, "pick_pct", exclude=excluded)
+    if opp_pick and opp_pick[0] in player_pool:
+        t = player_pool[opp_pick[0]]
+        likely[f"{opponent_name} likely pick"] = f"{opp_pick[0]} (pick {opp_pick[1].get('pick_pct', 'N/A')}, WR {opp_pick[1].get('win_rate', 'N/A')} vs {player_team_name} WR {t.get('win_rate', 'N/A')})"
+        excluded.append(opp_pick[0])
+    decider = _best_shared_map(player_pool, opponent_pool, exclude=excluded)
+    if decider:
+        likely["Likely decider"] = f"{decider[0]} ({player_team_name} pick {decider[1].get('pick_pct', 'N/A')} / {opponent_name} pick {decider[2].get('pick_pct', 'N/A')})"
+    notes.append(f"Likely maps are derived from last {TEAM_MAP_WINDOW_DAYS} days of HLTV team map pick/ban and win-rate splits when official veto is unavailable.")
+    return likely, notes
+
+
+def _likely_map_combo_note(per_map: Dict[str, Dict[str, Any]], likely_maps: Dict[str, str], headshots: bool = False) -> Optional[str]:
+    if not per_map or not likely_maps:
+        return None
+    extracted: List[str] = []
+    for value in likely_maps.values():
+        for map_name in _extract_map_names_from_text(value):
+            if map_name not in extracted:
+                extracted.append(map_name)
+    if len(extracted) < 2:
+        return None
+    total = 0.0; details = []
+    for map_name in extracted[:2]:
+        vals = per_map.get(map_name)
+        if not vals:
+            return None
+        cur = vals.get("avg_hs") if headshots else vals.get("avg_kills")
+        try:
+            cur_float = float(cur)
+        except Exception:
+            return None
+        total += cur_float
+        details.append(f"{map_name} {cur_float:.1f}{'HS' if headshots else 'K'}")
+    return f"Likely two-map sample from exact HLTV map history: {', '.join(details)} -> {total:.1f} {'HS' if headshots else 'kills'}."
+
+
+def build_payload_analytics(payload: Dict[str, Any], line: float, kill_mode: bool = True) -> Dict[str, Any]:
+    team_name = str(payload.get("Team", "N/A")); opponent_name = str(payload.get("Opponent", "N/A"))
+    team_rank = _safe_rank_value(payload.get("Team ranking")); opponent_rank = _safe_rank_value(payload.get("Opponent ranking"))
+    public_pick = _parse_pick_line(str(payload.get("Public pick", "N/A")))
+    odds = _parse_odds_line(str(payload.get("Thunderpick odds", payload.get("Match odds", "N/A"))))
+    h2h = payload.get("H2H Data", {}) or {}; likely_maps = payload.get("Likely maps", {}) or {}; per_map = payload.get("Per-map averages", {}) or {}
+    projection = _safe_float(payload.get("Projected kills" if kill_mode else "Projected headshots")); recent_avg = _safe_float(payload.get("Recent average"))
+    rating = _safe_float(payload.get("Rating 3.0")); kpr = _safe_float(payload.get("KPR")); dpr = _safe_float(payload.get("DPR")); adr = _safe_float(payload.get("ADR")); kast = _safe_pct_value(payload.get("KAST")); impact = _safe_float(payload.get("Impact"))
+    firepower = _safe_pct_value(str(payload.get("Firepower", "")).split("/")[0]) if "/" in str(payload.get("Firepower", "")) else None
+    opening = _safe_pct_value(str(payload.get("Opening", "")).split("/")[0]) if "/" in str(payload.get("Opening", "")) else None
+    entrying = _safe_pct_value(str(payload.get("Entrying", "")).split("/")[0]) if "/" in str(payload.get("Entrying", "")) else None
+    trading = _safe_pct_value(str(payload.get("Trading", "")).split("/")[0]) if "/" in str(payload.get("Trading", "")) else None
+    similar_rating = _safe_float(payload.get("Similar teams rating")); over_prob = _safe_pct_value(payload.get("Over probability")); under_prob = _safe_pct_value(payload.get("Under probability")); hit_rate = _safe_pct_value(payload.get("Hit rate"))
+    h2h_avg = _safe_float(h2h.get("h2h_avg_kills" if kill_mode else "h2h_avg_headshots")); h2h_sample = int(h2h.get("h2h_sample_size", 0) or 0)
+    map_combo_note = _likely_map_combo_note(per_map, likely_maps, headshots=not kill_mode)
+    recommendation = str(payload.get("Bet recommendation", "NO BET"))
+    if recommendation == "NO BET" and projection is not None:
+        recommendation = "OVER lean" if projection > line else "UNDER lean"
+    player_pros: List[str] = []; player_cons: List[str] = []; team_pros: List[str] = []; team_cons: List[str] = []; opponent_pros: List[str] = []; opponent_cons: List[str] = []
+    if projection is not None:
+        edge = projection - line; (player_pros if edge >= 1 else player_cons).append(f"Projection {projection:.1f} is {abs(edge):.1f} {'above' if edge >= 0 else 'below'} the line.")
+    if recent_avg is not None:
+        diff = recent_avg - line
+        if diff >= 1: player_pros.append(f"Recent exact two-map average is {recent_avg:.1f}.")
+        elif diff <= -1: player_cons.append(f"Recent exact two-map average is only {recent_avg:.1f}.")
+    for val, high, low, label in [(rating,1.1,1.0,"Rating 3.0"),(kpr,.75,.65,"KPR"),(adr,80,70,"ADR"),(kast,72,68,"KAST"),(impact,1.1,1.0,"Impact rating")]:
+        if val is None: continue
+        txt = f"{label} is {val:.1f}{'%' if label=='KAST' else ''}." if label in ('ADR','KAST') else f"{label} is {val:.2f}."
+        (player_pros if val >= high else player_cons if val < low else player_pros).append(txt)
+    if dpr is not None: (player_cons if dpr >= .72 else player_pros).append(f"DPR is {dpr:.2f}.")
+    for val,label,cut in [(firepower,"Firepower",70),(opening,"Opening",65),(entrying,"Entrying",60),(trading,"Trading",60)]:
+        if val is not None and val >= cut: player_pros.append(f"{label} bucket is {int(val)}/100.")
+    if similar_rating is not None: (player_pros if similar_rating >= 1.05 else player_cons if similar_rating < 1.0 else player_pros).append(f"Similar-team rating is {similar_rating:.2f}.")
+    if h2h_sample > 0 and h2h_avg is not None: (player_pros if h2h_avg > line else player_cons).append(f"H2H sample is {h2h_sample} series with {h2h_avg:.1f} average.")
+    if map_combo_note: (player_pros if projection is not None and projection >= line else player_cons).append(map_combo_note)
+    if team_rank is not None and opponent_rank is not None:
+        if team_rank < opponent_rank: team_pros.append(f"Better rank edge: #{team_rank} vs #{opponent_rank}."); opponent_cons.append(f"Rank disadvantage: #{opponent_rank} vs #{team_rank}.")
+        elif team_rank > opponent_rank: team_cons.append(f"Rank disadvantage: #{team_rank} vs #{opponent_rank}."); opponent_pros.append(f"Better rank edge: #{opponent_rank} vs #{team_rank}.")
+    for name,pct in public_pick.items():
+        if _team_name_matches(name, team_name): (team_pros if pct >= 55 else team_cons if pct <= 45 else team_pros).append(f"Public pick is {pct:.1f}% on {team_name}.")
+        elif _team_name_matches(name, opponent_name): (opponent_pros if pct >= 55 else opponent_cons if pct <= 45 else opponent_pros).append(f"Public pick is {pct:.1f}% on {opponent_name}.")
+    for name, odd in odds.items():
+        if _team_name_matches(name, team_name): (team_pros if odd <= 1.70 else team_cons if odd >= 2.20 else team_pros).append(f"Thunderpick price: {team_name} {odd:.2f}.")
+        elif _team_name_matches(name, opponent_name): (opponent_pros if odd <= 1.70 else opponent_cons if odd >= 2.20 else opponent_pros).append(f"Thunderpick price: {opponent_name} {odd:.2f}.")
+    if not team_pros: team_pros.append("No clean extra team edge from available HLTV sample.")
+    if not team_cons: team_cons.append("No major team-level red flag in available HLTV sample.")
+    if not opponent_pros: opponent_pros.append("No major opponent-level edge beyond default matchup context.")
+    if not opponent_cons: opponent_cons.append("No obvious opponent weakness beyond available HLTV data.")
+    if not player_pros: player_pros.append("No standout player edge beyond raw projection.")
+    if not player_cons: player_cons.append("No major player-specific red flag beyond normal variance.")
+    side_prob = over_prob if "OVER" in recommendation.upper() else under_prob
+    report = [f"Final grade {payload.get('Final grade','N/A')} with a {recommendation} angle."]
+    if projection is not None: report.append(f"Projection is {projection:.1f} against a {line:.1f} line.")
+    if hit_rate is not None: report.append(f"Exact two-map hit rate is {hit_rate:.1f}%.")
+    if side_prob is not None: report.append(f"Model side probability is {side_prob:.1f}%.")
+    if h2h_sample > 0: report.append(str(h2h.get("h2h_summary", "")) + ".")
+    if map_combo_note: report.append(map_combo_note)
+    return {"Team pros": team_pros[:4], "Team cons": team_cons[:4], "Opponent pros": opponent_pros[:4], "Opponent cons": opponent_cons[:4], "Player pros": player_pros[:5], "Player cons": player_cons[:5], "Player report": " ".join(report).strip(), "H2H summary": h2h.get("h2h_summary", "N/A"), "Likely map combo note": map_combo_note or "N/A", "Analytics headline": f"{payload.get('Final grade','N/A')} • {payload.get('Thunderpick odds', payload.get('Match odds','N/A'))} • {h2h.get('h2h_summary','No H2H sample')}", "Recommended side probability": f"{side_prob:.1f}%" if side_prob is not None else "N/A"}
 
 def _choose_similar_bucket(opponent_rank: Optional[int], stats: Dict[str, str]) -> Tuple[str, str]:
     if opponent_rank is None:
@@ -916,6 +1235,7 @@ def _build_payload(player_name: str, line: float, opponent: str, kill_mode: bool
     display_name = profile.get("display_name") or display_slug
 
     start_30, end_30 = _today_range(30)
+    start_90, end_90 = _today_range(H2H_WINDOW_DAYS)
     recent_stats = fetch_player_stats(pid, slug, start_date=start_30, end_date=end_30)
     all_time_stats = fetch_player_stats(pid, slug)
 
@@ -924,7 +1244,8 @@ def _build_payload(player_name: str, line: float, opponent: str, kill_mode: bool
         return {"error": "No HLTV match history was found for this player."}
 
     hydrated_rows = hydrate_maps(raw_rows, slug, display_name)
-    paired_rows = pair_recent_series(hydrated_rows, max_series=MAX_RECENT_SERIES)
+    all_paired_rows = pair_recent_series(hydrated_rows, max_series=None)
+    paired_rows = all_paired_rows[:MAX_RECENT_SERIES]
 
     fallback_used = False
     if paired_rows:
@@ -970,6 +1291,8 @@ def _build_payload(player_name: str, line: float, opponent: str, kill_mode: bool
     team_name = profile.get("team_name", "N/A")
     match_url = _find_profile_match_url(profile.get("match_links", []), opponent)
     match_context = fetch_match_context(match_url, team_name, opponent) if match_url else {}
+    resolved_team = match_context.get("Resolved team", team_name)
+    resolved_opponent = match_context.get("Resolved opponent", opponent.title() if opponent and opponent.upper() != "N/A" else "N/A")
 
     if match_context.get("Team ranking") in (None, "", "N/A"):
         match_context["Team ranking"] = profile.get("team_ranking", "N/A")
@@ -997,8 +1320,8 @@ def _build_payload(player_name: str, line: float, opponent: str, kill_mode: bool
 
     payload = {
         "Player": display_name,
-        "Opponent": opponent.title() if opponent and opponent.upper() != "N/A" else "N/A",
-        "Team": team_name,
+        "Opponent": resolved_opponent,
+        "Team": resolved_team,
         "Prop Line": f"{line} {'Kills' if kill_mode else 'Headshots'}",
         "Bet recommendation": recommendation,
         "Final grade": final_grade,
@@ -1034,7 +1357,7 @@ def _build_payload(player_name: str, line: float, opponent: str, kill_mode: bool
         "ADR": recent_stats.get("ADR", all_time_stats.get("ADR", "N/A")),
         "KAST": recent_stats.get("KAST", all_time_stats.get("KAST", "N/A")),
         "Impact": recent_stats.get("Impact", all_time_stats.get("Impact", "N/A")),
-        "Round swing": recent_stats.get("Round swing", "N/A"),
+        "Round swing": recent_stats.get("Round swing", all_time_stats.get("Round swing", "N/A")),
         "HS %": recent_stats.get("HS %", all_time_stats.get("HS %", "N/A")),
         "Opening kills per round": recent_stats.get("Opening kills per round", all_time_stats.get("Opening kills per round", "N/A")),
         "Trade kills per round": recent_stats.get("Trade kills per round", all_time_stats.get("Trade kills per round", "N/A")),
@@ -1048,12 +1371,13 @@ def _build_payload(player_name: str, line: float, opponent: str, kill_mode: bool
         "Team ranking": match_context.get("Team ranking", profile.get("team_ranking", "N/A")),
         "Opponent ranking": match_context.get("Opponent ranking", "N/A"),
         "Match odds": match_context.get("Match odds", "N/A"),
-        "Moneyline": match_context.get("Moneyline", "N/A"),
-        "Moneyline american": match_context.get("Moneyline american", "N/A"),
+        "Thunderpick odds": match_context.get("Thunderpick odds", match_context.get("Match odds", "N/A")),
         "Public pick": match_context.get("Public pick", "N/A"),
         "Veto": match_context.get("Veto", []),
         "Likely maps": match_context.get("Likely maps", {}),
-        "H2H Data": _h2h_payload(paired_rows, opponent),
+        "Likely maps source": match_context.get("Likely maps source", "N/A"),
+        "Veto notes": match_context.get("Veto notes", []),
+        "H2H Data": _h2h_payload(all_paired_rows, resolved_opponent, max_age_days=H2H_WINDOW_DAYS),
         "Scenarios": _build_scenarios(paired_rows, sum(kill_samples), sum(sample_rounds)) if paired_rows else {},
         "Recent Totals (M1+M2 Combined)": kill_samples,
         "Recent HS Totals (M1+M2)": hs_samples,
@@ -1064,13 +1388,16 @@ def _build_payload(player_name: str, line: float, opponent: str, kill_mode: bool
         "Recent HS Median": round(median(hs_samples), 1) if hs_samples else "N/A",
         "All-time profile HS %": all_time_stats.get("HS %", recent_stats.get("HS %", "N/A")),
         "Paired series rows": paired_rows,
+        "All paired series rows": all_paired_rows,
         "Raw maps": hydrated_rows,
         "Per-map averages": build_per_map_averages(hydrated_rows),
         "Sample": f"{len(paired_rows)} series" if paired_rows else f"{len(hydrated_rows[:10])} maps (fallback)",
         "Sample note": "Exact series sample" if not fallback_used else "Fallback to exact map sample",
         "Recent stat window": f"{start_30} to {end_30}",
+        "H2H window": f"{start_90 if 'start_90' in locals() else 'N/A'} to {end_90 if 'end_90' in locals() else 'N/A'}",
     }
 
+    payload.update(build_payload_analytics(payload, line=line, kill_mode=kill_mode))
     return payload
 
 
