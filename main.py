@@ -1,386 +1,412 @@
 import os
-import asyncio
-from typing import Any, Dict, List
 import discord
 from discord.ext import commands
+from discord import ui
+from dotenv import load_dotenv
 
-# AUDIT FIX: import the dedicated exact-HS scraper entrypoint as well.
-from scraper import get_headshot_info, get_player_info
+from scraper import get_player_info, get_headshot_info
 
-GREEN = 0x35D39B
-RED = 0xE24A68
-BRAND = 0xF0A51A
-PANEL = 0x111827
-MUTED = 0x64748B
+load_dotenv()
 
+TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 
-def score_num(data: Dict[str, Any]) -> float:
-    try:
-        return float(str(data.get("Final grade", "0")).split("/")[0])
-    except Exception:
-        return 0.0
+def _pick(data, *keys, default="N/A"):
+    for key in keys:
+        if key in data:
+            value = data.get(key)
+            if value not in (None, "", [], {}):
+                return value
+    return default
 
 
-def bar(score: float, total: int = 10) -> str:
-    filled = max(0, min(total, int(round(score))))
-    return "▰" * filled + "▱" * (total - filled)
+def _fmt_list(values, limit=10):
+    if not values:
+        return "No sample"
+    shown = values[:limit]
+    return ", ".join(str(x) for x in shown)
 
 
-def side_color(data: Dict[str, Any]):
-    rec = str(data.get("Bet recommendation", "NO BET")).upper()
-    if "OVER" in rec:
-        return "OVER", GREEN
-    if "UNDER" in rec:
-        return "UNDER", RED
-    return "NO BET", MUTED
+def _fmt_maps(likely_maps):
+    if not likely_maps:
+        return "N/A"
+    if isinstance(likely_maps, dict):
+        parts = [f"{k}: {v}" for k, v in likely_maps.items()]
+        return "\n".join(parts) if parts else "N/A"
+    if isinstance(likely_maps, list):
+        return "\n".join(str(x) for x in likely_maps[:8]) if likely_maps else "N/A"
+    return str(likely_maps)
 
 
-def map_name(value: str) -> str:
-    names = {
-        "dust2": "Dust2",
-        "mirage": "Mirage",
-        "inferno": "Inferno",
-        "nuke": "Nuke",
-        "ancient": "Ancient",
-        "anubis": "Anubis",
-        "vertigo": "Vertigo",
-        "overpass": "Overpass",
-        "cache": "Cache",
-        "train": "Train",
-        "cobblestone": "Cobblestone",
-        "tuscan": "Tuscan",
-        "season": "Season",
-    }
-    return names.get(str(value).lower(), str(value).title())
+def _fmt_veto(veto):
+    if not veto:
+        return "N/A"
+    if isinstance(veto, list):
+        return "\n".join(str(x) for x in veto[:7])
+    return str(veto)
 
 
-def safe_field_value(value: str, max_chars: int = 1024) -> str:
-    if len(value) <= max_chars:
-        return value
-    return value[: max_chars - 4] + "..."
+def _fmt_per_map(per_map):
+    if not per_map:
+        return "No map sample"
+    lines = []
+    for map_name, vals in per_map.items():
+        avg_k = vals.get("avg_kills", "N/A")
+        avg_hs = vals.get("avg_hs", "N/A")
+        avg_kpr = vals.get("avg_kpr", "N/A")
+        sample = vals.get("sample_size", 0)
+        lines.append(f"• {map_name}: {avg_k} K | {avg_hs} HS | {avg_kpr} KPR ({sample})")
+    return "\n".join(lines[:8]) if lines else "No map sample"
 
 
-def trim_lines(lines: List[str], limit: int = 1024) -> str:
+def _fmt_paired_rows(rows, headshots=False):
+    if not rows:
+        return "No exact 2-map series sample"
     out = []
-    total = 0
-    for line in lines:
-        if total + len(line) + 1 > limit:
-            break
-        out.append(line)
-        total += len(line) + 1
-    return "\n".join(out) if out else "N/A"
+    for row in rows[:8]:
+        total = row.get("headshots") if headshots else row.get("kills")
+        out.append(
+            f"{row.get('date', 'N/A')} vs {row.get('opponent', 'UNK')}: "
+            f"{row.get('map1', 'N/A')} + {row.get('map2', 'N/A')} = {total} "
+            f"({row.get('rounds', 'N/A')} rounds)"
+        )
+    return "\n".join(out)
 
 
-def header(data: Dict[str, Any], line: float, opponent: str, prop: str) -> str:
-    return (
-        f"# CS2 Prop Grader\n"
-        f"`Maps 1–2 only` • `HLTV direct stats` • `Bootstrap from exact totals`\n\n"
-        f"## {data.get('Player', 'Player')} vs {opponent.title()} | `{prop} O/U {line}`\n"
-        f"**Rating 3.0:** `{data.get('Rating 3.0', 'N/A')}` • "
-        f"**Role:** `{data.get('Role', 'N/A')}` • "
-        f"**Team rank:** `{data.get('Team ranking', 'N/A')}` • "
-        f"**Odds:** `{data.get('Match odds', 'N/A')}`"
-    )
+def _fmt_raw_maps(rows):
+    if not rows:
+        return "No raw exact maps"
+    out = []
+    for row in rows[:12]:
+        out.append(
+            f"{row.get('date', 'N/A')} vs {row.get('opponent', 'UNK')} "
+            f"on {row.get('map_name', 'N/A')}: "
+            f"{row.get('kills', 'N/A')}K / {row.get('headshots', 'N/A')}HS / "
+            f"{row.get('rounds', 'N/A')}R / {row.get('rating', 'N/A')} rtg"
+        )
+    return "\n".join(out)
 
 
-def grade_embed(data: Dict[str, Any], line: float, opponent: str) -> discord.Embed:
-    side, color = side_color(data)
-    score = score_num(data)
-    totals = data.get("Recent Totals (M1+M2 Combined)", [])
-    q25 = data.get("25th percentile", "N/A")
-    q75 = data.get("75th percentile", "N/A")
-    recent = " ".join(((" 🟢" if x > line else " 🔴") + f" `{x}`") for x in totals[:10]) or "No sample"
-    scenarios = data.get("Scenarios", {}) or {}
-
+def build_scan_embed(player, line, opponent, info):
+    desc = "Maps 1–2 only • HLTV direct sample • bootstrap from exact totals"
     embed = discord.Embed(
-        color=color,
-        description=safe_field_value(header(data, line, opponent, "Kills")),
+        title=f"{player.title()} vs {opponent.title()} | Kills O/U {line}",
+        description=desc,
+        color=discord.Color.blue(),
     )
-
-    grade_value = (
-        f"**Side:** `{side}`\n"
-        f"**Grade:** `{data.get('Final grade', 'N/A')}`\n"
-        f"{bar(score)}\n"
-        f"**Misprice:** `{data.get('Mispriced or not', 'N/A')}`"
+    embed.add_field(
+        name="Header",
+        value=(
+            f"Rating 3.0: {_pick(info, 'Rating 3.0')}\n"
+            f"Role: {_pick(info, 'Role')}\n"
+            f"Team rank: {_pick(info, 'Team ranking')}\n"
+            f"Odds: {_pick(info, 'Match odds')}"
+        ),
+        inline=False,
     )
-    embed.add_field(name="🎯 Grade", value=safe_field_value(grade_value), inline=False)
-
-    sample_value = (
-        f"**Avg:** `{data.get('Recent average', 'N/A')}`\n"
-        f"**Median:** `{data.get('Recent median', 'N/A')}`\n"
-        f"**Projection:** `{data.get('Recent projection', 'N/A')}`\n"
-        f"**Hit rate:** `{data.get('Hit rate', 'N/A')}`\n"
-        f"**25th/75th:** `{q25}` / `{q75}`"
+    embed.add_field(
+        name="Quick view",
+        value=(
+            f"Recent avg: {_pick(info, 'Recent average')}\n"
+            f"Recent median: {_pick(info, 'Recent median')}\n"
+            f"Projection: {_pick(info, 'Projected kills', 'Recent projection')}\n"
+            f"Hit rate: {_pick(info, 'Hit rate')}\n"
+            f"Over/Under: {_pick(info, 'Over probability')} / {_pick(info, 'Under probability')}\n"
+            f"Edge: {_pick(info, 'Edge vs line')}\n"
+            f"Recommendation: {_pick(info, 'Bet recommendation')}\n"
+            f"Grade: {_pick(info, 'Final grade')}"
+        ),
+        inline=False,
     )
-    embed.add_field(name="📊 Exact sample", value=safe_field_value(sample_value), inline=True)
-
-    bootstrap_value = (
-        f"**Mean:** `{data.get('Simulated mean', 'N/A')}`\n"
-        f"**Median:** `{data.get('Simulated median', 'N/A')}`\n"
-        f"**Std Dev:** `{data.get('Std Dev', 'N/A')}`\n"
-        f"**Over:** `{data.get('Over probability', 'N/A')}`\n"
-        f"**Under:** `{data.get('Under probability', 'N/A')}`\n"
-        f"**Edge:** `{data.get('Edge vs line', 'N/A')}`"
+    embed.add_field(
+        name="Recent exact totals",
+        value=_fmt_list(_pick(info, "Recent Totals (M1+M2 Combined)", default=[])),
+        inline=False,
     )
-    embed.add_field(name="📈 Bootstrap", value=safe_field_value(bootstrap_value), inline=True)
-
-    embed.add_field(name="⭐ Recent totals", value=safe_field_value(recent), inline=False)
-
-    scenarios_value = (
-        f"**Short:** `{scenarios.get('short', {}).get('expected_kills', 'N/A')}` | "
-        f"**Normal:** `{scenarios.get('normal', {}).get('expected_kills', 'N/A')}` | "
-        f"**Long:** `{scenarios.get('long', {}).get('expected_kills', 'N/A')}`"
-    )
-    embed.add_field(name="🎮 Round scenarios", value=safe_field_value(scenarios_value), inline=False)
-
-    embed.set_footer(text="Exact K(hs) mapstats only • no fabricated headshots or negative-binomial fallback")
+    embed.set_footer(text="Role is derived from HLTV profile buckets. Match odds stay N/A if HLTV does not expose them cleanly.")
     return embed
 
 
-def data_embed(data: Dict[str, Any], line: float, opponent: str) -> discord.Embed:
+def build_data_embed(player, info):
     embed = discord.Embed(
-        color=BRAND,
-        description=safe_field_value(header(data, line, opponent, "Kills")),
+        title=f"{player.title()} | Data",
+        description="Player profile buckets, recent filtered stats, exact series sample, and raw map hydration",
+        color=discord.Color.green(),
     )
-
-    paired = []
-    for row in data.get("Paired series rows", [])[:10]:
-        # Use safe .get methods for nested paired data fallback structural integrity
-        row_opp = row.get("opponent", "Unknown")
-        row_kills = row.get("kills", 0)
-        emoji = "🟢" if row_kills > line else "🔴"
-        paired.append(
-            f"{emoji} **{row_opp}** (`{row.get('date', 'N/A')}`) — "
-            f"{row_kills}K {row.get('headshots', 0)}HS {row.get('rounds', 0)}R | "
-            f"{map_name(row.get('map1', 'N/A'))} + {map_name(row.get('map2', 'N/A'))}"
-        )
-
-    raw = []
-    for row in data.get("Raw maps", [])[:20]:
-        # FIXED: Implemented .get() defaults to permanently bypass KeyError line breaks on parsing failures
-        r_map = map_name(row.get("map_name", "N/A"))
-        r_kills = str(row.get("kills", "N/A"))
-        r_deaths = str(row.get("deaths", "N/A"))
-        r_hs = str(row.get("headshots", "N/A"))
-        r_rounds = str(row.get("rounds", "N/A"))
-        r_opp = str(row.get("opponent", "UNK")).upper()[:12]
-        
-        raw.append(
-            f"`{r_map:<10} {r_kills:>2}-{r_deaths:<2} HS {r_hs:>3} R {r_rounds:>3} vs {r_opp}`"
-        )
-
-    pmap = []
-    for map_key, vals in list((data.get("Per-map averages") or {}).items())[:7]:
-        pmap.append(
-            f"`{map_name(map_key):<10} {vals.get('avg_kills', 'N/A')}K • "
-            f"{vals.get('avg_hs', 'N/A')}HS • {vals.get('avg_kpr', 'N/A')} KPR • "
-            f"{vals.get('sample_size', 0)} maps`"
-        )
-
-    embed.add_field(name="⭐ Exact paired series", value=trim_lines(paired), inline=False)
-    embed.add_field(name="📦 Exact raw maps", value=trim_lines(raw), inline=False)
-
-    profile_value = (
-        f"**Rating 3.0:** `{data.get('Rating 3.0', 'N/A')}`\n"
-        f"**Firepower:** `{data.get('Firepower', 'N/A')}`\n"
-        f"**Entrying:** `{data.get('Entrying', 'N/A')}`\n"
-        f"**Trading:** `{data.get('Trading', 'N/A')}`\n"
-        f"**Opening:** `{data.get('Opening', 'N/A')}`\n"
-        f"**Clutching:** `{data.get('Clutching', 'N/A')}`\n"
-        f"**Sniping:** `{data.get('Sniping', 'N/A')}`\n"
-        f"**Utility:** `{data.get('Utility', 'N/A')}`"
+    embed.add_field(
+        name="Profile buckets",
+        value=(
+            f"Firepower: {_pick(info, 'Firepower')}\n"
+            f"Entrying: {_pick(info, 'Entrying')}\n"
+            f"Trading: {_pick(info, 'Trading')}\n"
+            f"Opening: {_pick(info, 'Opening')}\n"
+            f"Clutching: {_pick(info, 'Clutching')}\n"
+            f"Sniping: {_pick(info, 'Sniping')}\n"
+            f"Utility: {_pick(info, 'Utility')}"
+        ),
+        inline=True,
     )
-    embed.add_field(name="📋 HLTV profile buckets", value=safe_field_value(profile_value), inline=True)
-
-    stats_value = (
-        f"**KPR:** `{data.get('KPR', 'N/A')}`\n"
-        f"**DPR:** `{data.get('DPR', 'N/A')}`\n"
-        f"**ADR:** `{data.get('ADR', 'N/A')}`\n"
-        f"**KAST:** `{data.get('KAST', 'N/A')}`\n"
-        f"**Impact:** `{data.get('Impact', 'N/A')}`\n"
-        f"**HS %:** `{data.get('HS %', 'N/A')}`\n"
-        f"**Op.KPR:** `{data.get('Opening kills per round', 'N/A')}`\n"
-        f"**Trade.KPR:** `{data.get('Trade kills per round', 'N/A')}`"
+    embed.add_field(
+        name="Recent filtered stats",
+        value=(
+            f"KPR: {_pick(info, 'KPR')}\n"
+            f"DPR: {_pick(info, 'DPR')}\n"
+            f"ADR: {_pick(info, 'ADR')}\n"
+            f"KAST: {_pick(info, 'KAST')}\n"
+            f"Impact: {_pick(info, 'Impact')}\n"
+            f"Round swing: {_pick(info, 'Round swing')}\n"
+            f"HS%: {_pick(info, 'HS %')}\n"
+            f"Opening KPR: {_pick(info, 'Opening kills per round')}\n"
+            f"Trade KPR: {_pick(info, 'Trade kills per round')}"
+        ),
+        inline=True,
     )
-    embed.add_field(name="📊 Direct HLTV stats", value=safe_field_value(stats_value), inline=True)
-
-    versus_value = (
-        f"**Top 5:** `{data.get('Vs Top 5 rating', 'N/A')}`\n"
-        f"**Top 10:** `{data.get('Vs Top 10 rating', 'N/A')}`\n"
-        f"**Top 20:** `{data.get('Vs Top 20 rating', 'N/A')}`\n"
-        f"**Top 30:** `{data.get('Vs Top 30 rating', 'N/A')}`\n"
-        f"**Top 50:** `{data.get('Vs Top 50 rating', 'N/A')}`"
+    embed.add_field(
+        name="Opponent buckets",
+        value=(
+            f"Top 5: {_pick(info, 'Vs Top 5 rating')}\n"
+            f"Top 10: {_pick(info, 'Vs Top 10 rating')}\n"
+            f"Top 20: {_pick(info, 'Vs Top 20 rating')}\n"
+            f"Top 30: {_pick(info, 'Vs Top 30 rating')}\n"
+            f"Top 50: {_pick(info, 'Vs Top 50 rating')}\n"
+            f"Similar teams: {_pick(info, 'Similar teams')}\n"
+            f"Similar teams rating: {_pick(info, 'Similar teams rating')}"
+        ),
+        inline=False,
     )
-    embed.add_field(name="⚔️ Opponent buckets", value=safe_field_value(versus_value), inline=False)
-
-    embed.add_field(name="🗺️ Per-map sample", value=trim_lines(pmap), inline=False)
-
-    embed.set_footer(text="All kills/headshots shown here are exact Maps 1-2 totals from HLTV mapstats pages")
+    embed.add_field(
+        name="Exact paired series sample",
+        value=_fmt_paired_rows(_pick(info, "Paired series rows", default=[])),
+        inline=False,
+    )
+    embed.add_field(
+        name="Per-map exact averages",
+        value=_fmt_per_map(_pick(info, "Per-map averages", default={})),
+        inline=False,
+    )
     return embed
 
 
-def context_embed(data: Dict[str, Any], line: float, opponent: str) -> discord.Embed:
+def build_context_embed(player, opponent, info):
+    h2h = _pick(info, "H2H Data", default={})
     embed = discord.Embed(
-        color=PANEL,
-        description=safe_field_value(header(data, line, opponent, "Kills")),
+        title=f"{player.title()} vs {opponent.title()} | Context",
+        description="Current team/match context pulled from HLTV profile + match/analytics pages",
+        color=discord.Color.orange(),
     )
-
-    h2h = data.get("H2H Data", {}) or {}
-    veto = data.get("Veto", []) or []
-    likely = data.get("Likely maps", {}) or {}
-
-    context_value = (
-        f"**Role:** `{data.get('Role', 'N/A')}`\n"
-        f"**Role note:** `{data.get('Role note', 'N/A')}`\n"
-        f"**Team:** `{data.get('Team', 'N/A')}`\n"
-        f"**Team rank:** `{data.get('Team ranking', 'N/A')}`\n"
-        f"**Opponent rank:** `{data.get('Opponent ranking', 'N/A')}`\n"
-        f"**Odds:** `{data.get('Match odds', 'N/A')}`\n"
-        f"**Moneyline:** `{data.get('Moneyline', 'N/A')}` / "
-        f"`{data.get('Moneyline american', 'N/A')}`"
+    embed.add_field(
+        name="Context",
+        value=(
+            f"Role: {_pick(info, 'Role')}\n"
+            f"Role note: {_pick(info, 'Role note')}\n"
+            f"Team: {_pick(info, 'Team')}\n"
+            f"Team rank: {_pick(info, 'Team ranking')}\n"
+            f"Opponent rank: {_pick(info, 'Opponent ranking')}\n"
+            f"Odds: {_pick(info, 'Match odds')}\n"
+            f"Moneyline: {_pick(info, 'Moneyline')} / {_pick(info, 'Moneyline american')}\n"
+            f"Public pick: {_pick(info, 'Public pick')}"
+        ),
+        inline=False,
     )
-    embed.add_field(name="🎯 Context", value=safe_field_value(context_value), inline=False)
-
-    h2h_value = (
-        f"**Similar split:** `{data.get('Similar teams', 'N/A')}`\n"
-        f"**H2H sample:** `{h2h.get('h2h_sample_size', 0)}`\n"
-        f"**H2H avg kills:** `{h2h.get('h2h_avg_kills', 'N/A')}`\n"
-        f"**H2H avg HS:** `{h2h.get('h2h_avg_headshots', 'N/A')}`\n"
-        f"**Rounds note:** `{data.get('Exact round note', 'N/A')}`"
+    embed.add_field(
+        name="Similar teams / H2H",
+        value=(
+            f"Similar split: {_pick(info, 'Similar teams')}\n"
+            f"Similar rating: {_pick(info, 'Similar teams rating')}\n"
+            f"H2H sample: {h2h.get('h2h_sample_size', 0)}\n"
+            f"H2H avg kills: {h2h.get('h2h_avg_kills', 'N/A')}\n"
+            f"H2H avg HS: {h2h.get('h2h_avg_headshots', 'N/A')}\n"
+            f"Rounds note: {_pick(info, 'Exact round note')}"
+        ),
+        inline=False,
     )
-    embed.add_field(name="🔄 Similar teams / H2H", value=safe_field_value(h2h_value), inline=False)
-
-    maps_str = " • ".join(f"{key}: {value}" for key, value in likely.items()) if likely else "N/A"
-    embed.add_field(name="🗺️ Likely maps", value=safe_field_value(maps_str), inline=False)
-
-    embed.add_field(name="🎪 Veto / map notes", value=trim_lines(veto), inline=False)
-
-    embed.set_footer(text="Role is derived from HLTV profile buckets; missing values remain N/A instead of guessed")
+    embed.add_field(
+        name="Likely maps",
+        value=_fmt_maps(_pick(info, "Likely maps", default={})),
+        inline=False,
+    )
+    embed.add_field(
+        name="Veto / map notes",
+        value=_fmt_veto(_pick(info, "Veto", default=[])),
+        inline=False,
+    )
     return embed
 
 
-class PropView(discord.ui.View):
-    def __init__(self, data: Dict[str, Any], line: float, opponent: str):
-        super().__init__(timeout=3600)
-        self.data = data
+def build_grade_embed(player, line, info, headshots=False):
+    stat_name = "Headshots" if headshots else "Kills"
+    recent_totals_key = "Recent HS Totals (M1+M2)" if headshots else "Recent Totals (M1+M2 Combined)"
+    projection_key = "Projected headshots" if headshots else "Projected kills"
+
+    embed = discord.Embed(
+        title=f"{player.title()} | {stat_name} Grade",
+        description="Maps 1–2 only, based on exact recent HLTV samples",
+        color=discord.Color.purple(),
+    )
+    embed.add_field(
+        name="Projection / edge",
+        value=(
+            f"Line: {line}\n"
+            f"Projection: {_pick(info, projection_key, 'Recent projection')}\n"
+            f"Recent avg: {_pick(info, 'Recent average') if not headshots else _pick(info, 'Recent HS Average')}\n"
+            f"Recent median: {_pick(info, 'Recent median') if not headshots else _pick(info, 'Recent HS Median')}\n"
+            f"Over probability: {_pick(info, 'Over probability')}\n"
+            f"Under probability: {_pick(info, 'Under probability')}\n"
+            f"Hit rate: {_pick(info, 'Hit rate')}\n"
+            f"Edge: {_pick(info, 'Edge vs line')}\n"
+            f"Recommendation: {_pick(info, 'Bet recommendation')}\n"
+            f"Grade: {_pick(info, 'Final grade')}\n"
+            f"Mispriced: {_pick(info, 'Mispriced or not')}"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Distribution",
+        value=(
+            f"Recent totals: {_fmt_list(_pick(info, recent_totals_key, default=[]))}\n"
+            f"P25: {_pick(info, '25th percentile')}\n"
+            f"P75: {_pick(info, '75th percentile')}\n"
+            f"Sim mean: {_pick(info, 'Simulated mean')}\n"
+            f"Sim median: {_pick(info, 'Simulated median')}\n"
+            f"Std dev: {_pick(info, 'Std Dev')}"
+        ),
+        inline=False,
+    )
+    if not headshots:
+        scenarios = _pick(info, "Scenarios", default={})
+        if scenarios:
+            embed.add_field(
+                name="Round-based scenarios",
+                value=(
+                    f"Short: {scenarios.get('short', {}).get('rounds', 'N/A')} rounds -> "
+                    f"{scenarios.get('short', {}).get('expected_kills', 'N/A')} K\n"
+                    f"Normal: {scenarios.get('normal', {}).get('rounds', 'N/A')} rounds -> "
+                    f"{scenarios.get('normal', {}).get('expected_kills', 'N/A')} K\n"
+                    f"Long: {scenarios.get('long', {}).get('rounds', 'N/A')} rounds -> "
+                    f"{scenarios.get('long', {}).get('expected_kills', 'N/A')} K"
+                ),
+                inline=False,
+            )
+    else:
+        embed.add_field(
+            name="Headshot profile",
+            value=(
+                f"Recent HS%: {_pick(info, 'Recent HS %')}\n"
+                f"All-time profile HS%: {_pick(info, 'All-time profile HS %')}\n"
+                f"Recent totals: {_fmt_list(_pick(info, 'Recent HS Totals (M1+M2)', default=[]))}"
+            ),
+            inline=False,
+        )
+    return embed
+
+
+def build_raw_embed(player, info):
+    embed = discord.Embed(
+        title=f"{player.title()} | Raw exact sample",
+        description="Raw exact maps plus exact paired 2-map series rows",
+        color=discord.Color.dark_teal(),
+    )
+    embed.add_field(
+        name="Paired series rows",
+        value=_fmt_paired_rows(_pick(info, "Paired series rows", default=[])),
+        inline=False,
+    )
+    embed.add_field(
+        name="Raw maps",
+        value=_fmt_raw_maps(_pick(info, "Raw maps", default=[])),
+        inline=False,
+    )
+    embed.set_footer(text=f"Sample: {_pick(info, 'Sample')} | {_pick(info, 'Sample note')}")
+    return embed
+
+
+class ScanButtons(ui.View):
+    def __init__(self, player, line, opponent, info, headshots=False):
+        super().__init__(timeout=None)
+        self.player = player
         self.line = line
         self.opponent = opponent
+        self.info = info
+        self.headshots = headshots
 
-    async def swap(self, interaction: discord.Interaction, embed: discord.Embed):
-        await interaction.response.edit_message(embed=embed, view=self)
+    @ui.button(label="GRADE", style=discord.ButtonStyle.primary)
+    async def grade_button(self, interaction: discord.Interaction, button: ui.Button):
+        embed = build_grade_embed(self.player, self.line, self.info, headshots=self.headshots)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @discord.ui.button(label="GRADE", style=discord.ButtonStyle.primary, emoji="🎯")
-    async def grade_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
-        await self.swap(interaction, grade_embed(self.data, self.line, self.opponent))
+    @ui.button(label="DATA", style=discord.ButtonStyle.secondary)
+    async def data_button(self, interaction: discord.Interaction, button: ui.Button):
+        embed = build_data_embed(self.player, self.info)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @discord.ui.button(label="DATA", style=discord.ButtonStyle.secondary, emoji="📊")
-    async def data_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
-        await self.swap(interaction, data_embed(self.data, self.line, self.opponent))
+    @ui.button(label="CONTEXT", style=discord.ButtonStyle.secondary)
+    async def context_button(self, interaction: discord.Interaction, button: ui.Button):
+        embed = build_context_embed(self.player, self.opponent, self.info)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @discord.ui.button(label="CONTEXT", style=discord.ButtonStyle.secondary, emoji="🔍")
-    async def context_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
-        await self.swap(interaction, context_embed(self.data, self.line, self.opponent))
-
-
-@bot.event
-async def on_ready():
-    print(f"✅ Bot online: {bot.user}", flush=True)
-
-
-@bot.command()
-async def scan(ctx, player=None, line=None, *, opponent="N/A"):
-    if not player or not line:
-        return await ctx.send("❌ Usage: `!scan player line opponent`")
-
-    msg = await ctx.send(f"🔍 Loading exact HLTV grade for `{player}` vs `{opponent}`...")
-
-    async with ctx.typing():
-        try:
-            line_val = float(line)
-            data = await asyncio.to_thread(get_player_info, player, line_val, opponent)
-
-            if data.get("error"):
-                return await msg.edit(content=f"❌ {data['error']}")
-
-            view = PropView(data, line_val, opponent)
-            await msg.edit(content=None, embed=grade_embed(data, line_val, opponent), view=view)
-
-        except ValueError:
-            await msg.edit(content="❌ Invalid line; must be a number (e.g., `27.5`)")
-        except Exception as exc:
-            await msg.edit(content=f"❌ Scan crashed: `{exc}`")
+    @ui.button(label="RAW", style=discord.ButtonStyle.secondary)
+    async def raw_button(self, interaction: discord.Interaction, button: ui.Button):
+        embed = build_raw_embed(self.player, self.info)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 @bot.command()
-async def hs(ctx, player=None, line=None, *, opponent="N/A"):
-    if not player or not line:
-        return await ctx.send("❌ Usage: `!hs player line opponent`")
-
-    msg = await ctx.send(f"🔍 Loading exact HLTV headshot grade for `{player}` vs `{opponent}`...")
-
-    async with ctx.typing():
-        try:
-            line_val = float(line)
-            # AUDIT FIX: use exact headshot entrypoint from scraper instead of kill scan fallback logic.
-            data = await asyncio.to_thread(get_headshot_info, player, line_val, opponent)
-
-            if data.get("error"):
-                return await msg.edit(content=f"❌ {data['error']}")
-
-            side, color = side_color(data)
-            recent_hs = data.get("Recent HS Totals (M1+M2)", [])
-            recent = " ".join((("🟢" if x > line_val else "🔴") + f" `{x}`") for x in recent_hs[:10]) or "No sample"
-
-            embed = discord.Embed(
-                color=color,
-                description=safe_field_value(header(data, line_val, opponent, "Headshots")),
-            )
-
-            grade_value = (
-                f"**Side:** `{side}`\n"
-                f"**Avg:** `{data.get('Recent average', 'N/A')}`\n"
-                f"**Median:** `{data.get('Recent median', 'N/A')}`\n"
-                f"**Projection:** `{data.get('Recent projection', 'N/A')}`\n"
-                f"**Hit rate:** `{data.get('Hit rate', 'N/A')}`\n"
-                f"{recent}"
-            )
-            embed.add_field(name="🎯 Headshot grade", value=safe_field_value(grade_value), inline=False)
-
-            hs_profile_value = (
-                f"**Recent HS %:** `{data.get('Recent HS %', 'N/A')}`\n"
-                f"**Recent HS avg:** `{data.get('Recent HS Average', 'N/A')}`\n"
-                f"**Recent HS median:** `{data.get('Recent HS Median', 'N/A')}`\n"
-                f"**Profile HS %:** `{data.get('All-time profile HS %', 'N/A')}`\n"
-                f"**Over:** `{data.get('Over probability', 'N/A')}`\n"
-                f"**Under:** `{data.get('Under probability', 'N/A')}`\n"
-                f"**Edge:** `{data.get('Edge vs line', 'N/A')}`"
-            )
-            embed.add_field(name="📊 HS profile", value=safe_field_value(hs_profile_value), inline=False)
-
-            context_value = (
-                f"**Role:** `{data.get('Role', 'N/A')}`\n"
-                f"**Team rank:** `{data.get('Team ranking', 'N/A')}`\n"
-                f"**Opponent rank:** `{data.get('Opponent ranking', 'N/A')}`\n"
-                f"**Odds:** `{data.get('Match odds', 'N/A')}`"
-            )
-            embed.add_field(name="🔍 Context", value=safe_field_value(context_value), inline=False)
-
-            embed.set_footer(text="Exact Maps 1-2 K(hs) only • no estimated HS fallback")
-
-            await msg.edit(content=None, embed=embed)
-
-        except ValueError:
-            await msg.edit(content="❌ Invalid line; must be a number (e.g., `7.5`)")
-        except Exception as exc:
-            await msg.edit(content=f"❌ HS scan crashed: `{exc}`")
+async def ping(ctx):
+    await ctx.send("🏓 Pong!")
 
 
-if __name__ == "__main__":
-    token = os.getenv("DISCORD_TOKEN")
-    if not token:
-        raise SystemExit("❌ DISCORD_TOKEN missing.")
-    bot.run(token)
+@bot.command()
+async def scan(ctx, player: str = None, line: str = None, *, opponent: str = None):
+    if not player or not line or not opponent:
+        await ctx.send("Usage: `!scan player line opponent`")
+        return
+
+    try:
+        prop_line = float(line)
+    except ValueError:
+        await ctx.send("Line must be a number. Example: `!scan szejn 28.5 BRUTE`")
+        return
+
+    msg = await ctx.send(f"🔎 Pulling HLTV data for **{player}** vs **{opponent}**...")
+    info = get_player_info(player, prop_line, opponent)
+
+    if info.get("error"):
+        await msg.edit(content=f"❌ {info['error']}")
+        return
+
+    embed = build_scan_embed(player, prop_line, opponent, info)
+    view = ScanButtons(player, prop_line, opponent, info, headshots=False)
+    await msg.edit(content="", embed=embed, view=view)
+
+
+@bot.command()
+async def hs(ctx, player: str = None, line: str = None, *, opponent: str = None):
+    if not player or not line or not opponent:
+        await ctx.send("Usage: `!hs player line opponent`")
+        return
+
+    try:
+        prop_line = float(line)
+    except ValueError:
+        await ctx.send("Line must be a number. Example: `!hs szejn 16.5 BRUTE`")
+        return
+
+    msg = await ctx.send(f"🎯 Pulling HLTV headshot data for **{player}** vs **{opponent}**...")
+    info = get_headshot_info(player, prop_line, opponent)
+
+    if info.get("error"):
+        await msg.edit(content=f"❌ {info['error']}")
+        return
+
+    embed = build_grade_embed(player, prop_line, info, headshots=True)
+    view = ScanButtons(player, prop_line, opponent, info, headshots=True)
+    await msg.edit(content="", embed=embed, view=view)
+
+
+if not TOKEN:
+    raise RuntimeError("DISCORD_BOT_TOKEN is missing from environment.")
+
+bot.run(TOKEN)
