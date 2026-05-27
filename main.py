@@ -2,11 +2,11 @@ import os
 import discord
 from discord.ext import commands
 from discord import ui
-from dotenv import load_dotenv
+
 
 from scraper import get_player_info, get_headshot_info
 
-load_dotenv()
+
 
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 intents = discord.Intents.default()
