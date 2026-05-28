@@ -1,7 +1,7 @@
 import os
 import discord
 from discord.ext import commands
-from discord import ui
+from discord import app_commands, ui
 
 from scraper import get_player_info, get_headshot_info
 
@@ -27,12 +27,12 @@ def _fmt_list(values, limit=10):
 async def on_ready():
     print(f"{bot.user} is now running!")
 
-@bot.slash_command(description="Get over/under player Kills projection and stats")
-async def player(ctx: commands.Context, player: str, line: float, opponent: str = "N/A"):
-    await ctx.defer()
+@app_commands.command(description="Get over/under player Kills projection and stats")
+async def player(interaction: discord.Interaction, player: str, line: float, opponent: str = "N/A"):
+    await interaction.response.defer()
     info = get_player_info(player, line, opponent)
     if "error" in info:
-        await ctx.send(info["error"])
+        await interaction.followup.send(info["error"])
         return
 
     desc = (
@@ -85,14 +85,14 @@ async def player(ctx: commands.Context, player: str, line: float, opponent: str 
         inline=False,
     )
     embed.set_footer(text="Role is derived from HLTV profile buckets.")
-    await ctx.send(embed=embed)
+    await interaction.followup.send(embed=embed)
 
-@bot.slash_command(description="Get over/under player Headshots projection and stats")
-async def headshots(ctx: commands.Context, player: str, line: float, opponent: str = "N/A"):
-    await ctx.defer()
+@app_commands.command(description="Get over/under player Headshots projection and stats")
+async def headshots(interaction: discord.Interaction, player: str, line: float, opponent: str = "N/A"):
+    await interaction.response.defer()
     info = get_headshot_info(player, line, opponent)
     if "error" in info:
-        await ctx.send(info["error"])
+        await interaction.followup.send(info["error"])
         return
 
     desc = (
@@ -145,6 +145,9 @@ async def headshots(ctx: commands.Context, player: str, line: float, opponent: s
         inline=False,
     )
     embed.set_footer(text="Role is derived from HLTV profile buckets.")
-    await ctx.send(embed=embed)
+    await interaction.followup.send(embed=embed)
+
+bot.tree.add_command(player)
+bot.tree.add_command(headshots)
 
 bot.run(TOKEN)
