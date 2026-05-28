@@ -72,6 +72,15 @@ MAP_ALIASES = {
     "vert": "Vertigo",
 }
 
+# Static player mapping for common players
+STATIC_PLAYERS = {}
+
+
+def _should_render(url: str) -> bool:
+    """Determine if URL needs JavaScript rendering"""
+    # HLTV pages generally don't need rendering, but add check if needed
+    return False
+
 
 def _slugify(name: str) -> str:
     """Normalize player names for matching on HLTV's index."""
@@ -533,6 +542,53 @@ def build_payload_analytics(payload: Dict[str, Any], line: float, kill_mode: boo
         "Opponent strength note": opponent_strength_note,
     }
     return stats
+
+
+def _build_payload(player_name: str, line: float = 0.0, opponent: str = "N/A", kill_mode: bool = True) -> Dict[str, Any]:
+    """Build player payload with stats and analytics"""
+    print(f"DEBUG: Building payload for {player_name} with line {line}")
+    
+    try:
+        # Return a basic mock payload to test the flow
+        payload = {
+            "Player": player_name,
+            "Team": "Team Name",
+            "Team ranking": 10,
+            "Opponent": opponent,
+            "Opponent ranking": 15,
+            "Rating 3.0": 1.15,
+            "Kills per round": 0.65,
+            "Deaths per round": 0.55,
+            "KAST": 72.5,
+            "Impact": 1.05,
+            "Firepower": 85.0,
+            "Opening": 60.0,
+            "Entrying": 55.0,
+            "Trading": 70.0,
+            "Projected kills": line + 2.5,
+            "Recent average": line + 1.5,
+            "Recent median": line + 1.0,
+            "Over probability": 55.0,
+            "Under probability": 45.0,
+            "Hit rate": 58.0,
+            "Edge vs line": 2.5,
+            "Bet recommendation": "OVER",
+            "Final grade": "B",
+            "H2H Data": {},
+            "H2H rows": [],
+            "Likely maps": {},
+            "Per-map averages": {},
+            "Opponent strength": "Moderate favorite",
+            "Opponent strength note": "Team is ranked higher than opponent",
+        }
+        
+        print(f"DEBUG: Payload built successfully")
+        return payload
+    except Exception as exc:
+        print(f"ERROR in _build_payload: {exc}")
+        import traceback
+        traceback.print_exc()
+        return {"error": str(exc)}
 
 
 def get_player_info(player_name: str, line: float = 0.0, opponent: str = "N/A") -> Dict[str, Any]:
