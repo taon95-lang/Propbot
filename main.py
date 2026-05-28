@@ -6,6 +6,11 @@ import os
 import sys
 import asyncio
 
+# Initialize the bot FIRST - before any decorators
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(command_prefix="!", intents=intents)
+
 def _pick(info, key, default="N/A"):
     val = info.get(key, None)
     return default if val is None else val
@@ -98,6 +103,63 @@ def build_scan_embed(player, line, opponent, info):
             )
         ),
         inline=False,
+    )
+    return embed
+
+def build_grade_embed(player, line, info, headshots=False):
+    """Build embed for grade button"""
+    embed = discord.Embed(
+        title=f"{player.title()} | Grade Analysis",
+        description=f"Line: {line} {'Headshots' if headshots else 'Kills'}",
+        color=discord.Color.blue()
+    )
+    embed.add_field(
+        name="Grade",
+        value=_pick(info, "Final grade", "N/A"),
+        inline=True
+    )
+    embed.add_field(
+        name="Hit Rate",
+        value=f"{_pick(info, 'Hit rate', 'N/A')}%",
+        inline=True
+    )
+    return embed
+
+def build_data_embed(player, line, opponent, info):
+    """Build embed for data button"""
+    embed = discord.Embed(
+        title=f"{player.title()} | Detailed Stats",
+        description=f"vs {opponent.title() if opponent else 'N/A'}",
+        color=discord.Color.green()
+    )
+    embed.add_field(
+        name="Kill Stats",
+        value=f"Recent Avg: {_pick(info, 'Recent average')}\nProjection: {_pick(info, 'Projected kills')}",
+        inline=True
+    )
+    embed.add_field(
+        name="Performance",
+        value=f"Rating: {_pick(info, 'Rating 3.0')}\nImpact: {_pick(info, 'Impact')}",
+        inline=True
+    )
+    return embed
+
+def build_context_embed(player, opponent, info):
+    """Build embed for context button"""
+    embed = discord.Embed(
+        title=f"{player.title()} | Match Context",
+        description=f"vs {opponent.title() if opponent else 'N/A'}",
+        color=discord.Color.purple()
+    )
+    embed.add_field(
+        name="Team Info",
+        value=f"Rank: {_pick(info, 'Team ranking')}\nOpponent Rank: {_pick(info, 'Opponent ranking')}",
+        inline=True
+    )
+    embed.add_field(
+        name="Opponent Strength",
+        value=_pick(info, "Opponent strength note", "N/A"),
+        inline=False
     )
     return embed
 
