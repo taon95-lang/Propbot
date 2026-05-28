@@ -157,51 +157,82 @@ async def headshots(interaction: discord.Interaction, player: str, line: float, 
     embed.set_footer(text="Role is derived from HLTV profile buckets.")
     await interaction.followup.send(embed=embed)
 
-@bot.tree.command(description="Scan multiple players and get prop recommendations")
-async def scan(interaction: discord.Interaction, players: str, lines: str, opponent: str = "N/A"):
+@bot.tree.command(description="Scan a player for prop recommendations")
+async def scan(interaction: discord.Interaction, player: str, line: float, opponent: str = "N/A"):
     """
-    Scan multiple players at once.
-    Format: /scan players:s1mple,niko,device lines:25.5,24.2,23.0 opponent:faze
+    Scan a single player.
+    Format: /scan player:s1mple line:25.5 opponent:faze
     """
     await interaction.response.defer()
     
-    player_list = [p.strip() for p in players.split(",")]
-    line_list = [float(l.strip()) for l in lines.split(",")]
-    
-    if len(player_list) != len(line_list):
-        await interaction.followup.send("❌ Number of players must match number of lines!")
+    info = get_player_info(player, line, opponent)
+    if "error" in info:
+        await interaction.followup.send(f"❌ {info['error']}")
         return
     
-    embeds = []
-    for player_name, line in zip(player_list, line_list):
-        info = get_player_info(player_name, line, opponent)
-        if "error" in info:
-            continue
-        
-        embed = discord.Embed(
-            title=f"{player_name.title()} | Kills O/U {line}",
-            color=discord.Color.green() if info.get("Bet recommendation") == "OVER" else discord.Color.red() if info.get("Bet recommendation") == "UNDER" else discord.Color.greyple(),
-        )
-        embed.add_field(
-            name="Summary",
-            value=(
-                f"Rec: **{_pick(info, 'Bet recommendation')}**\n"
-                f"Grade: **{_pick(info, 'Final grade')}**\n"
-                f"Avg: {_pick(info, 'Recent average')}\n"
-                f"Hit Rate: {_pick(info, 'Hit rate')}\n"
-                f"Edge: {_pick(info, 'Edge vs line')}"
-            ),
-            inline=False,
-        )
-        embeds.append(embed)
+    recommendation = _pick(info, 'Bet recommendation')
     
-    if not embeds:
-        await interaction.followup.send("❌ No valid players found!")
-        return
+    # Color based on recommendation
+    if recommendation == "OVER":
+        color = discord.Color.green()
+    elif recommendation == "UNDER":
+        color = discord.Color.red()
+    else:
+        color = discord.Color.greyple()
     
-    # Send embeds (Discord allows up to 10 per message)
-    for embed in embeds[:10]:
-        await interaction.followup.send(embed=embed)
+    embed = discord.Embed(
+        title=f"SCAN: {player.title()} vs {opponent.title()} | Kills O/U {line}",
+        color=color,
+    )
+    embed.add_field(
+        name="🎯 Recommendation",
+        value=f"**{recommendation}** (Grade: {_pick(info, 'Final grade')})",
+        inline=False,
+    )
+    embed.add_field(
+        name="📊 Stats",
+        value=(
+            f"Recent avg: {_pick(info, 'Recent average')}\n"
+            f"Recent median: {_pick(info, 'Recent median')}\n"
+            f"Hit rate: {_pick(info, 'Hit rate')}\n"
+            f"Over prob: {_pick(info, 'Over probability')}\n"
+            f"Under prob: {_pick(info, 'Under probability')}"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="⚡ Edge",
+        value=_pick(info, 'Edge vs line'),
+        inline=False,
+    )
+    embed.add_field(
+        name="🎭 Role",
+        value=f"{_pick(info, 'Role')} - {_pick(info, 'Role note')}",
+        inline=False,
+    )
+    embed.add_field(
+        name="💯 Attributes",
+        value=(
+            f"Firepower: {_pick(info, 'Firepower')}\n"
+            f"Entrying: {_pick(info, 'Entrying')}\n"
+            f"Sniping: {_pick(info, 'Sniping')}\n"
+            f"Utility: {_pick(info, 'Utility')}"
+        ),
+        inline=True,
+    )
+    embed.add_field(
+        name="📈 Performance",
+        value=(
+            f"KPR: {_pick(info, 'KPR')}\n"
+            f"ADR: {_pick(info, 'ADR')}\n"
+            f"Rating 3.0: {_pick(info, 'Rating 3.0')}\n"
+            f"KAST: {_pick(info, 'KAST')}"
+        ),
+        inline=True,
+    )
+    embed.set_footer(text="Powered by HLTV Stats")
+    
+    await interaction.followup.send(embed=embed)
 
 if __name__ == "__main__":
     bot.run(TOKEN)
