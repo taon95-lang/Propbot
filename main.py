@@ -1,14 +1,28 @@
 import os
+import asyncio
 import discord
 from discord.ext import commands
-from discord import app_commands, ui
+from discord import app_commands
 
 from scraper import get_player_info, get_headshot_info
 
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
+
+class MyBot(commands.Bot):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+    
+    async def on_ready(self):
+        print(f"{self.user} is now running!")
+        try:
+            synced = await self.tree.sync()
+            print(f"Synced {len(synced)} command(s)")
+        except Exception as e:
+            print(f"Failed to sync commands: {e}")
+
+bot = MyBot(command_prefix="!", intents=intents)
 
 # Utility to pick fields from info safely
 def _pick(info, key, fallback_key=None, default="N/A"):
@@ -23,11 +37,7 @@ def _fmt_list(values, limit=10):
         return "No sample"
     return ", ".join(str(x) for x in values[:limit])
 
-@bot.event
-async def on_ready():
-    print(f"{bot.user} is now running!")
-
-@app_commands.command(description="Get over/under player Kills projection and stats")
+@bot.tree.command(description="Get over/under player Kills projection and stats")
 async def player(interaction: discord.Interaction, player: str, line: float, opponent: str = "N/A"):
     await interaction.response.defer()
     info = get_player_info(player, line, opponent)
@@ -87,7 +97,7 @@ async def player(interaction: discord.Interaction, player: str, line: float, opp
     embed.set_footer(text="Role is derived from HLTV profile buckets.")
     await interaction.followup.send(embed=embed)
 
-@app_commands.command(description="Get over/under player Headshots projection and stats")
+@bot.tree.command(description="Get over/under player Headshots projection and stats")
 async def headshots(interaction: discord.Interaction, player: str, line: float, opponent: str = "N/A"):
     await interaction.response.defer()
     info = get_headshot_info(player, line, opponent)
@@ -147,7 +157,5 @@ async def headshots(interaction: discord.Interaction, player: str, line: float, 
     embed.set_footer(text="Role is derived from HLTV profile buckets.")
     await interaction.followup.send(embed=embed)
 
-bot.tree.add_command(player)
-bot.tree.add_command(headshots)
-
-bot.run(TOKEN)
+if __name__ == "__main__":
+    bot.run(TOKEN)
