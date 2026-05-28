@@ -4,6 +4,7 @@ from discord import ui
 from scraper import get_player_info, get_headshot_info
 import os
 import sys
+import asyncio
 
 def _pick(info, key, default="N/A"):
     val = info.get(key, None)
@@ -100,7 +101,6 @@ def build_scan_embed(player, line, opponent, info):
         ),
         inline=False,
     )
-    # Headshot profile field (only relevant for HS mode)
     if False:
         embed.add_field(
             name="Headshot profile",
@@ -137,7 +137,6 @@ def build_context_embed(player, opponent, info):
         ),
         inline=False,
     )
-    # Game pace & blowout fields
     embed.add_field(
         name="Game pace",
         value=_truncate(
@@ -150,7 +149,6 @@ def build_context_embed(player, opponent, info):
         ),
         inline=False,
     )
-    # Likely maps and map weighting
     embed.add_field(
         name="Likely maps",
         value=_truncate(_fmt_list(_pick(info, "Likely maps", default=[]))),
@@ -210,7 +208,6 @@ def build_context_embed(player, opponent, info):
 
 def build_data_embed(player, line, opponent, info):
     resolved_opponent = _pick(info, "Opponent", default=opponent.title())
-    # Profile buckets and recent stats
     embed = discord.Embed(title=f"{player.title()} | Data",
                           description="Player profile buckets, recent filtered stats, and raw match data",
                           color=discord.Color.green())
@@ -370,25 +367,30 @@ def build_raw_embed(player, info):
 
 @commands.command()
 async def scan(ctx, player: str, line: str, opponent: str = None):
-    info = get_player_info(player, float(line), opponent)
-    if "error" in info:
-        return await ctx.send(f"❌ {info['error']}")
-    view = ScanButtons(player, float(line), opponent, info, headshots=False)
-    embed = build_scan_embed(player, float(line), opponent, info)
-    await ctx.send(embed=embed, view=view)
+    # Triggers Discord's "Propbot is typing..." status so users know it's loading
+    async with ctx.typing():
+        try:
+            # Runs blocking, synchronous scraper inside a background thread safely
+            info = await asyncio.to_thread(get_player_info, player, float(line), opponent)
+            
+            if "error" in info:
+                return await ctx.send(f"❌ {info['error']}")
+                
+            view = ScanButtons(player, float(line), opponent, info, headshots=False)
+            embed = build_scan_embed(player, float(line), opponent, info)
+            await ctx.send(embed=embed, view=view)
+            
+        except Exception as e:
+            await ctx.send(f"⚠️ An internal system error occurred: {e}")
 
 # ===================================================
 # AUTOMATED APP RUNNER AND GATEWAY ORCHESTRATION
 # ===================================================
 
-# Configure application intent permissions
 intents = discord.Intents.default()
 intents.message_content = True  
 
-# Build out core Command Framework runtime context 
 bot = commands.Bot(command_prefix="!", intents=intents)
-
-# Explicitly bind command tree configurations
 bot.add_command(scan)
 
 @bot.event
@@ -396,7 +398,6 @@ async def on_ready():
     print(f"✅ Bot successfully logged in as {bot.user}")
 
 if __name__ == "__main__":
-    # Updated to look precisely for your custom key: DISCORD_BOT_TOKEN
     token = os.environ.get("DISCORD_BOT_TOKEN")
     
     if not token:
