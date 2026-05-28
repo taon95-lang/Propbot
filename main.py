@@ -396,11 +396,11 @@ async def on_ready():
     print(f"✅ Bot successfully logged in as {bot.user}")
 
 if __name__ == "__main__":
-    # Pull gateway token safely out of environment variables
-    token = os.environ.get("DISCORD_TOKEN")
+    # Updated to look precisely for your custom key: DISCORD_BOT_TOKEN
+    token = os.environ.get("DISCORD_BOT_TOKEN")
     
     if not token:
-        print("❌ CRITICAL ERROR: 'DISCORD_TOKEN' environment variable is missing!", file=sys.stderr)
+        print("❌ CRITICAL ERROR: 'DISCORD_BOT_TOKEN' environment variable is missing!", file=sys.stderr)
         sys.exit(1)
         
     try:
