@@ -157,5 +157,51 @@ async def headshots(interaction: discord.Interaction, player: str, line: float, 
     embed.set_footer(text="Role is derived from HLTV profile buckets.")
     await interaction.followup.send(embed=embed)
 
+@bot.tree.command(description="Scan multiple players and get prop recommendations")
+async def scan(interaction: discord.Interaction, players: str, lines: str, opponent: str = "N/A"):
+    """
+    Scan multiple players at once.
+    Format: /scan players:s1mple,niko,device lines:25.5,24.2,23.0 opponent:faze
+    """
+    await interaction.response.defer()
+    
+    player_list = [p.strip() for p in players.split(",")]
+    line_list = [float(l.strip()) for l in lines.split(",")]
+    
+    if len(player_list) != len(line_list):
+        await interaction.followup.send("❌ Number of players must match number of lines!")
+        return
+    
+    embeds = []
+    for player_name, line in zip(player_list, line_list):
+        info = get_player_info(player_name, line, opponent)
+        if "error" in info:
+            continue
+        
+        embed = discord.Embed(
+            title=f"{player_name.title()} | Kills O/U {line}",
+            color=discord.Color.green() if info.get("Bet recommendation") == "OVER" else discord.Color.red() if info.get("Bet recommendation") == "UNDER" else discord.Color.greyple(),
+        )
+        embed.add_field(
+            name="Summary",
+            value=(
+                f"Rec: **{_pick(info, 'Bet recommendation')}**\n"
+                f"Grade: **{_pick(info, 'Final grade')}**\n"
+                f"Avg: {_pick(info, 'Recent average')}\n"
+                f"Hit Rate: {_pick(info, 'Hit rate')}\n"
+                f"Edge: {_pick(info, 'Edge vs line')}"
+            ),
+            inline=False,
+        )
+        embeds.append(embed)
+    
+    if not embeds:
+        await interaction.followup.send("❌ No valid players found!")
+        return
+    
+    # Send embeds (Discord allows up to 10 per message)
+    for embed in embeds[:10]:
+        await interaction.followup.send(embed=embed)
+
 if __name__ == "__main__":
     bot.run(TOKEN)
