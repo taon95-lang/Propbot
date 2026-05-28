@@ -328,10 +328,40 @@ def _value_near(
     return None
 
 
+def _normalise_bucket_score(value: Any) -> str:
+    """Return HLTV attribute values as X/100, never as a bare label."""
+    raw = _norm(value)
+    if not raw or raw.upper() == "N/A":
+        return "N/A"
+    m = re.search(r"(\d{1,3})\s*/\s*100", raw)
+    if m:
+        n = max(0, min(100, int(m.group(1))))
+        return f"{n}/100"
+    m = re.fullmatch(r"\d{1,3}", raw)
+    if m:
+        n = max(0, min(100, int(raw)))
+        return f"{n}/100"
+    return "N/A"
+
+
 def _extract_bucket_scores(lines: List[str]) -> Dict[str, str]:
+    """Extract HLTV's seven profile attribute buckets as numeric X/100 scores.
+
+    HLTV sometimes renders attributes as separate label/value nodes and sometimes as
+    compact text around the label. This parser handles both layouts.
+    """
     buckets: Dict[str, str] = {}
+    compact_text = " ".join(lines)
     for label in ATTR_BUCKET_KEYS:
-        buckets[label] = _value_near(lines, label, r"(\d{1,3}/100)", window=6, exact=True) or "N/A"
+        value = (
+            _value_near(lines, label, r"(\d{1,3}\s*/\s*100)", window=10, exact=True)
+            or _value_after(lines, label, r"\d{1,3}", lookahead=5, exact=True)
+            or _value_before(lines, label, r"\d{1,3}", lookback=5, exact=True)
+            or _extract_first_match(compact_text, rf"{re.escape(label)}\s*(?:score)?\s*(\d{{1,3}}\s*/\s*100)")
+            or _extract_first_match(compact_text, rf"(\d{{1,3}}\s*/\s*100)\s*{re.escape(label)}")
+            or _extract_first_match(compact_text, rf"{re.escape(label)}\s*(?:score)?\s*(\d{{1,3}})(?!\d)")
+        )
+        buckets[label] = _normalise_bucket_score(value)
     return buckets
 
 
@@ -604,8 +634,8 @@ def fetch_player_stats(pid: str, slug: str, start_date: Optional[str] = None, en
     stats["Trade kills per round"] = _value_near(lines, "Trade kills per round", r"(\d+\.\d+)", window=5, exact=True) or _extract_first_match(text, r"Trade kills per round(?:.|\n){0,40}?([0-9]+\.[0-9]+)") or "N/A"
     stats["Maps played"] = _value_near(lines, "Maps played", r"([\d,]+)", window=4, exact=False) or _extract_first_match(text, r"Maps played\s*([\d,]+)") or "N/A"
     stats["Rounds played"] = _value_near(lines, "Rounds played", r"([\d,]+)", window=4, exact=False) or _extract_first_match(text, r"Rounds played\s*([\d,]+)") or "N/A"
-    for label in ATTR_BUCKET_KEYS:
-        stats[label] = _value_near(lines, label, r"(\d{1,3}/100)", window=6, exact=True) or "N/A"
+    for label, value in _extract_bucket_scores(lines).items():
+        stats[label] = value
     for bucket in (5, 10, 20, 30, 50):
         label = f"vs top {bucket} opponents"
         stats[f"Vs Top {bucket} rating"] = _value_near(lines, label, r"(-|\d+\.\d+)", window=8, exact=False) or _extract_first_match(text, rf"vs top {bucket} opponents(?:.|\n){{0,80}}?(-|[0-9]+\.[0-9]+)") or "N/A"
@@ -976,6 +1006,10 @@ def fetch_match_context(match_url: Optional[str], player_team: str, opponent: st
     veto, official_likely_maps = _extract_veto_and_maps(lines)
     player_rank = _extract_team_rank_from_lines(lines, resolved_player_team)
     opponent_rank = _extract_team_rank_from_lines(lines, resolved_opponent)
+    if not player_rank and player_entry:
+        player_rank = _safe_rank_value(fetch_team_rank(player_entry.get("id"), player_entry.get("slug")))
+    if not opponent_rank and opponent_entry:
+        opponent_rank = _safe_rank_value(fetch_team_rank(opponent_entry.get("id"), opponent_entry.get("slug")))
     teams_for_display = [x for x in [resolved_player_team, resolved_opponent] if x]
     if len(teams_for_display) < 2:
         teams_for_display = [x.get("name", "") for x in team_links[:2] if x.get("name")]
@@ -997,6 +1031,10 @@ def fetch_match_context(match_url: Optional[str], player_team: str, opponent: st
                 teams_for_display = [x for x in [resolved_player_team, resolved_opponent] if x]
             player_rank = player_rank or _extract_team_rank_from_lines(analytics_lines, resolved_player_team)
             opponent_rank = opponent_rank or _extract_team_rank_from_lines(analytics_lines, resolved_opponent)
+            if not player_rank and player_entry:
+                player_rank = _safe_rank_value(fetch_team_rank(player_entry.get("id"), player_entry.get("slug")))
+            if not opponent_rank and opponent_entry:
+                opponent_rank = _safe_rank_value(fetch_team_rank(opponent_entry.get("id"), opponent_entry.get("slug")))
             public_pick = public_pick or _extract_pick_percentages(analytics_lines, teams_for_display)
             if not veto:
                 analytics_veto, analytics_likely = _extract_veto_and_maps(analytics_lines)
@@ -1143,6 +1181,193 @@ def _likely_map_combo_note(per_map: Dict[str, Dict[str, Any]], likely_maps: Dict
         total += cur_float
         details.append(f"{map_name} {cur_float:.1f}{'HS' if headshots else 'K'}")
     return f"Likely two-map sample from exact HLTV map history: {', '.join(details)} -> {total:.1f} {'HS' if headshots else 'kills'}."
+
+def fetch_team_rank(team_id: Optional[str], team_slug: Optional[str]) -> str:
+    """Fetch HLTV team page rank as a fallback when match page rank is missing."""
+    if not team_id or not team_slug:
+        return "N/A"
+    soup, _, _ = _get_soup(f"{HLTV_BASE}/team/{team_id}/{team_slug}", render=True)
+    if not soup:
+        soup, _, _ = _get_soup(f"{HLTV_BASE}/team/{team_id}/{team_slug}", render=False)
+    if not soup:
+        return "N/A"
+    lines = _lines_from_soup(soup)
+    text = "\n".join(lines)
+    for pat in (
+        r"World ranking\s*#\s*(\d+)",
+        r"World rank\s*#\s*(\d+)",
+        r"Current rank\s*#\s*(\d+)",
+        r"#\s*(\d+)\s*World ranking",
+    ):
+        hit = _extract_first_match(text, pat)
+        if hit:
+            try:
+                return _fmt_rank(int(hit))
+            except Exception:
+                pass
+    for idx, line in enumerate(lines):
+        if "ranking" in line.lower() or "world" in line.lower():
+            block = " ".join(lines[max(0, idx - 3):idx + 6])
+            m = re.search(r"#\s*(\d+)", block)
+            if m:
+                return _fmt_rank(int(m.group(1)))
+    return "N/A"
+
+
+def _series_maps(row: Dict[str, Any]) -> List[str]:
+    out = []
+    for key in ("map1", "map2"):
+        val = _norm(row.get(key))
+        if val and val != "N/A":
+            out.append(val)
+    if not out and isinstance(row.get("raw_maps"), list):
+        for rm in row.get("raw_maps", [])[:2]:
+            val = _norm(rm.get("map_name"))
+            if val:
+                out.append(val)
+    return out
+
+
+def _map_weighted_projection(
+    rows: List[Dict[str, Any]],
+    likely_maps: Dict[str, str],
+    per_map: Dict[str, Dict[str, Any]],
+    fallback_projection: Optional[float],
+    headshots: bool = False,
+) -> Dict[str, Any]:
+    extracted: List[str] = []
+    for value in (likely_maps or {}).values():
+        for map_name in _extract_map_names_from_text(value):
+            if map_name not in extracted:
+                extracted.append(map_name)
+    details = []
+    total = 0.0
+    used = 0
+    for map_name in extracted[:2]:
+        vals = per_map.get(map_name, {})
+        key = "avg_hs" if headshots else "avg_kills"
+        cur = _safe_float(vals.get(key))
+        sample = vals.get("sample_size", vals.get("maps", "N/A"))
+        if cur is None:
+            continue
+        details.append(f"{map_name}: {cur:.1f} {'HS' if headshots else 'K'} over {sample} map sample")
+        total += cur
+        used += 1
+    if used >= 2:
+        return {
+            "Map weighted projection": round(total, 1),
+            "Map weighted KPR": _map_weighted_kpr_from_names(extracted[:2], per_map),
+            "Map weighting note": " | ".join(details),
+            "True map weighting": "ON: likely HLTV map pool matched player exact map history",
+        }
+    return {
+        "Map weighted projection": fallback_projection if fallback_projection is not None else "N/A",
+        "Map weighted KPR": "N/A",
+        "Map weighting note": "No two-map likely-map match found in player exact map history; using recent M1-M2 projection.",
+        "True map weighting": "LIMITED: official veto / map pool unavailable or thin sample",
+    }
+
+
+def _map_weighted_kpr_from_names(map_names: List[str], per_map: Dict[str, Dict[str, Any]]) -> str:
+    vals = []
+    weights = []
+    for map_name in map_names:
+        row = per_map.get(map_name, {})
+        kpr = _safe_float(row.get("avg_kpr"))
+        sample = _safe_float(row.get("sample_size", row.get("maps", 1))) or 1.0
+        if kpr is not None:
+            vals.append(kpr * sample)
+            weights.append(sample)
+    if vals and sum(weights) > 0:
+        return f"{sum(vals)/sum(weights):.3f}"
+    return "N/A"
+
+
+def _pace_model(rows: List[Dict[str, Any]], line: float, projection: Optional[float]) -> Dict[str, Any]:
+    rounds = [int(r.get("rounds", 0) or 0) for r in rows if int(r.get("rounds", 0) or 0) > 0]
+    kills = [int(r.get("kills", 0) or 0) for r in rows if int(r.get("rounds", 0) or 0) > 0]
+    if not rounds:
+        return {
+            "Pace model": "N/A",
+            "Map pace": "N/A",
+            "Blowout risk": "N/A",
+            "Overtime probability": "N/A",
+            "Pace adjusted projection": projection if projection is not None else "N/A",
+        }
+    avg_rounds = mean(rounds)
+    med_rounds = median(rounds)
+    short_rate = sum(1 for r in rounds if r <= 38) / len(rounds) * 100.0
+    ot_rate = sum(1 for r in rounds if r >= 49) / len(rounds) * 100.0
+    blowout_rate = sum(1 for r in rounds if r <= 34) / len(rounds) * 100.0
+    total_rounds = sum(rounds)
+    kpr = (sum(kills) / total_rounds) if total_rounds else None
+    adjusted = round(kpr * med_rounds, 1) if kpr is not None else projection
+    pace_label = "Fast/short" if med_rounds < 40 else "Normal" if med_rounds <= 46 else "Long/OT-prone"
+    return {
+        "Pace model": f"{pace_label}: median {med_rounds:.1f} rounds, average {avg_rounds:.1f} rounds",
+        "Map pace": f"Short-map rate {short_rate:.1f}% | normal center {med_rounds:.1f} rounds",
+        "Blowout risk": f"{blowout_rate:.1f}% of recent M1-M2 samples finished at 34 rounds or fewer",
+        "Overtime probability": f"{ot_rate:.1f}% of recent M1-M2 samples reached 49+ rounds",
+        "Pace adjusted projection": adjusted if adjusted is not None else "N/A",
+    }
+
+
+def _multi_kill_pressure(rows: List[Dict[str, Any]], line: float) -> Dict[str, Any]:
+    if not rows:
+        return {
+            "Multi-kill pressure": "N/A",
+            "2K/3K frequency": "N/A",
+            "Clutch conversion": "N/A",
+            "Eco farming": "N/A",
+            "Anti-eco padding": "N/A",
+        }
+    kill_samples = [int(r.get("kills", 0) or 0) for r in rows]
+    round_samples = [int(r.get("rounds", 0) or 0) for r in rows]
+    if not kill_samples:
+        return {"Multi-kill pressure": "N/A", "2K/3K frequency": "N/A", "Clutch conversion": "N/A", "Eco farming": "N/A", "Anti-eco padding": "N/A"}
+    avg_kills = mean(kill_samples)
+    ceiling = max(kill_samples)
+    high_spike_rate = sum(1 for k in kill_samples if k >= line + 3) / len(kill_samples) * 100.0
+    two_k_proxy = sum(max(0, k - (r * 0.58)) for k, r in zip(kill_samples, round_samples or [40]*len(kill_samples)))
+    two_k_freq = min(100.0, max(0.0, (two_k_proxy / max(1, sum(round_samples) / 2.0)) * 100.0)) if round_samples else 0.0
+    pressure = "HIGH" if high_spike_rate >= 35 or ceiling >= line + 8 else "MEDIUM" if high_spike_rate >= 20 or ceiling >= line + 4 else "LOW"
+    clutch_note = "Use HLTV Clutching bucket when available; fallback is spike stability from exact M1-M2 samples."
+    eco_note = "Potential padding risk checked through blowout/short-map rate; exact eco kills are only used if HLTV exposes them on parsed pages."
+    anti_eco = "Downgrade unders when spike rate is high; downgrade overs when blowout risk is high and KPR is not elite."
+    return {
+        "Multi-kill pressure": f"{pressure}: ceiling {ceiling}, avg {avg_kills:.1f}, spike rate {high_spike_rate:.1f}% above line+3",
+        "2K/3K frequency": f"Proxy {two_k_freq:.1f}% from excess kills over normal KPR pace",
+        "Clutch conversion": clutch_note,
+        "Eco farming": eco_note,
+        "Anti-eco padding": anti_eco,
+    }
+
+
+def _opponent_strength_model(payload: Dict[str, Any]) -> Dict[str, Any]:
+    team_rank = _safe_rank_value(payload.get("Team ranking"))
+    opp_rank = _safe_rank_value(payload.get("Opponent ranking"))
+    sim_rating = _safe_float(payload.get("Similar teams rating"))
+    if opp_rank is None:
+        strength = "N/A"
+        note = "Opponent rank unavailable from current HLTV scrape."
+    elif opp_rank <= 10:
+        strength = "Elite"
+        note = f"Opponent is ranked #{opp_rank}; similar-team bucket should carry extra weight."
+    elif opp_rank <= 30:
+        strength = "Strong"
+        note = f"Opponent is ranked #{opp_rank}; normal top-tier resistance expected."
+    elif opp_rank <= 50:
+        strength = "Mid"
+        note = f"Opponent is ranked #{opp_rank}; moderate resistance expected."
+    else:
+        strength = "Lower"
+        note = f"Opponent is ranked #{opp_rank}; softer team-strength profile."
+    if team_rank and opp_rank:
+        gap = opp_rank - team_rank
+        note += f" Rank gap: team #{team_rank} vs opponent #{opp_rank} ({gap:+d})."
+    if sim_rating is not None:
+        note += f" Player rating in selected similar bucket: {sim_rating:.2f}."
+    return {"Opponent strength": strength, "Opponent strength note": note}
 
 
 def build_payload_analytics(payload: Dict[str, Any], line: float, kill_mode: bool = True) -> Dict[str, Any]:
@@ -1318,6 +1543,17 @@ def _build_payload(player_name: str, line: float, opponent: str, kill_mode: bool
     total_hs_sample = sum(hs_samples) if hs_samples else 0
     recent_hs_pct = (total_hs_sample / total_kill_sample * 100.0) if total_kill_sample > 0 else None
 
+    per_map_averages = build_per_map_averages(hydrated_rows)
+    map_weighting = _map_weighted_projection(
+        rows=paired_rows,
+        likely_maps=match_context.get("Likely maps", {}) or {},
+        per_map=per_map_averages,
+        fallback_projection=projection,
+        headshots=not kill_mode,
+    )
+    pace_model = _pace_model(paired_rows if paired_rows else [], line=line, projection=projection)
+    multi_kill_model = _multi_kill_pressure(paired_rows if paired_rows else [], line=line)
+
     payload = {
         "Player": display_name,
         "Opponent": resolved_opponent,
@@ -1390,13 +1626,17 @@ def _build_payload(player_name: str, line: float, opponent: str, kill_mode: bool
         "Paired series rows": paired_rows,
         "All paired series rows": all_paired_rows,
         "Raw maps": hydrated_rows,
-        "Per-map averages": build_per_map_averages(hydrated_rows),
+        "Per-map averages": per_map_averages,
         "Sample": f"{len(paired_rows)} series" if paired_rows else f"{len(hydrated_rows[:10])} maps (fallback)",
         "Sample note": "Exact series sample" if not fallback_used else "Fallback to exact map sample",
         "Recent stat window": f"{start_30} to {end_30}",
         "H2H window": f"{start_90 if 'start_90' in locals() else 'N/A'} to {end_90 if 'end_90' in locals() else 'N/A'}",
     }
 
+    payload.update(map_weighting)
+    payload.update(pace_model)
+    payload.update(multi_kill_model)
+    payload.update(_opponent_strength_model(payload))
     payload.update(build_payload_analytics(payload, line=line, kill_mode=kill_mode))
     return payload
 
