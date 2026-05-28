@@ -1,6 +1,6 @@
 import discord
 from discord.ext import commands
-import ui
+from discord import ui
 from scraper import get_player_info, get_headshot_info
 
 def _pick(info, key, default="N/A"):
