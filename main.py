@@ -2,6 +2,8 @@ import discord
 from discord.ext import commands
 from discord import ui
 from scraper import get_player_info, get_headshot_info
+import os
+import sys
 
 def _pick(info, key, default="N/A"):
     val = info.get(key, None)
@@ -361,12 +363,48 @@ def build_analytics_embed(player, opponent, info):
     )
     return embed
 
+def build_raw_embed(player, info):
+    embed = discord.Embed(title=f"{player.title()} | Raw Diagnostic Data", color=discord.Color.dark_grey())
+    embed.add_field(name="System Logging", value="Granular telemetry has been isolated securely below.", inline=False)
+    return embed
+
 @commands.command()
 async def scan(ctx, player: str, line: str, opponent: str = None):
-    # ... existing code to process command ...
     info = get_player_info(player, float(line), opponent)
     if "error" in info:
         return await ctx.send(f"❌ {info['error']}")
     view = ScanButtons(player, float(line), opponent, info, headshots=False)
     embed = build_scan_embed(player, float(line), opponent, info)
     await ctx.send(embed=embed, view=view)
+
+# ===================================================
+# AUTOMATED APP RUNNER AND GATEWAY ORCHESTRATION
+# ===================================================
+
+# Configure application intent permissions
+intents = discord.Intents.default()
+intents.message_content = True  
+
+# Build out core Command Framework runtime context 
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+# Explicitly bind command tree configurations
+bot.add_command(scan)
+
+@bot.event
+async def on_ready():
+    print(f"✅ Bot successfully logged in as {bot.user}")
+
+if __name__ == "__main__":
+    # Pull gateway token safely out of environment variables
+    token = os.environ.get("DISCORD_TOKEN")
+    
+    if not token:
+        print("❌ CRITICAL ERROR: 'DISCORD_TOKEN' environment variable is missing!", file=sys.stderr)
+        sys.exit(1)
+        
+    try:
+        bot.run(token)
+    except Exception as e:
+        print(f"❌ CRITICAL STARTUP ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
