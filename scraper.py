@@ -48,6 +48,7 @@ print("HTTP engine: ScraperAPI Proxy routing with curl_cffi fallback active")
 HLTV_BASE = "https://www.hltv.org"
 
 
+
 SCRAPERAPI_KEY = os.environ.get("SCRAPERAPI_KEY", "")
 SCRAPER_PROXY_URL = os.environ.get("SCRAPER_PROXY_URL", "")
 
