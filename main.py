@@ -225,85 +225,79 @@ def build_context_embed(player, opponent, info):
         inline=False,
     )
     embed.add_field(
-        name="Veto",
-        value=_truncate(_fmt_veto(_pick(info, "Veto", default="N/A"))),
+        name="Veto / map notes",
+        value=_truncate(_fmt_veto(_pick(info, "Veto", default=[]))),
         inline=False,
     )
     embed.add_field(
         name="Team pros",
-        value=_fmt_bullets(_pick(info, "Team pros", default=[]), limit=4),
+        value=_fmt_bullets(_pick(info, "Team pros", default=[])),
         inline=True,
     )
     embed.add_field(
         name="Team cons",
-        value=_fmt_bullets(_pick(info, "Team cons", default=[]), limit=4),
+        value=_fmt_bullets(_pick(info, "Team cons", default=[])),
         inline=True,
     )
     embed.add_field(
-        name="Opponent pros",
-        value=_fmt_bullets(_pick(info, "Opponent pros", default=[]), limit=4),
+        name=f"{resolved_opponent} pros",
+        value=_fmt_bullets(_pick(info, "Opponent pros", default=[])),
         inline=True,
     )
     embed.add_field(
-        name="Opponent cons",
-        value=_fmt_bullets(_pick(info, "Opponent cons", default=[]), limit=4),
+        name=f"{resolved_opponent} cons",
+        value=_fmt_bullets(_pick(info, "Opponent cons", default=[])),
         inline=True,
+    )
+    embed.add_field(
+        name="H2H rows",
+        value=_fmt_h2h_rows(h2h.get("h2h_rows", []), headshots=False),
+        inline=False,
     )
     return embed
 
 
 def build_grade_embed(player, line, info, headshots=False):
-    resolved_opponent = _pick(info, "Opponent", default="")
+    stat_name = "Headshots" if headshots else "Kills"
     recent_totals_key = "Recent HS Totals (M1+M2)" if headshots else "Recent Totals (M1+M2 Combined)"
+    projection_key = "Projected headshots" if headshots else "Projected kills"
+
     embed = discord.Embed(
-        title=f"{player.title()} | Grade {line}",
-        description=f"Exact {'headshot' if headshots else 'kill'} grade for line {line}",
-        color=discord.Color.gold(),
+        title=f"{player.title()} | {stat_name} Grade",
+        description="Maps 1–2 only, based on exact recent HLTV samples",
+        color=discord.Color.purple(),
     )
     embed.add_field(
-        name="Grade summary",
+        name="Projection / edge",
         value=_truncate(
             (
-                f"Final grade: {_pick(info, 'Final grade')}\n"
-                f"Bet recommendation: {_pick(info, 'Bet recommendation')}\n"
-                f"Mispriced: {_pick(info, 'Mispriced or not')}\n"
-                f"Recent form: {_pick(info, 'Recent form')}"
+                f"Line: {line}\n"
+                f"Projection: {_pick(info, projection_key, 'Recent projection')}\n"
+                f"Recent avg: {_pick(info, 'Recent average') if not headshots else _pick(info, 'Recent HS Average')}\n"
+                f"Recent median: {_pick(info, 'Recent median') if not headshots else _pick(info, 'Recent HS Median')}\n"
+                f"Over probability: {_pick(info, 'Over probability')}\n"
+                f"Under probability: {_pick(info, 'Under probability')}\n"
+                f"Hit rate: {_pick(info, 'Hit rate')}\n"
+                f"Edge: {_pick(info, 'Edge vs line')}\n"
+                f"Recommendation: {_pick(info, 'Bet recommendation')}\n"
+                f"Grade: {_pick(info, 'Final grade')}\n"
+                f"Mispriced: {_pick(info, 'Mispriced or not')}"
             )
         ),
         inline=False,
     )
     embed.add_field(
-        name="Projection & sample",
+        name="Analytics",
         value=_truncate(
             (
-                f"Projection: {_pick(info, 'Projected kills' if not headshots else 'Projected headshots')}\n"
-                f"Sample: {_pick(info, 'Sample')}\n"
-                f"Sample note: {_pick(info, 'Sample note')}"
+                f"Thunderpick odds: {_pick(info, 'Thunderpick odds', 'Match odds')}\n"
+                f"Public pick: {_pick(info, 'Public pick')}\n"
+                f"H2H: {_pick(info, 'H2H summary')}\n"
+                f"Side probability: {_pick(info, 'Recommended side probability')}\n"
+                f"Likely map note: {_pick(info, 'Likely map combo note')}"
             )
         ),
         inline=False,
-    )
-    embed.add_field(
-        name="Stats (M1+M2 exact average)",
-        value=_truncate(
-            (
-                f"Recent avg: {_pick(info, 'Recent average')}\n"
-                f"Recent median: {_pick(info, 'Recent median')}\n"
-                f"Hit rate: {_pick(info, 'Hit rate')}"
-            )
-        ),
-        inline=True,
-    )
-    embed.add_field(
-        name="Probabilities",
-        value=_truncate(
-            (
-                f"Over: {_pick(info, 'Over probability')}\n"
-                f"Under: {_pick(info, 'Under probability')}\n"
-                f"Edge: {_pick(info, 'Edge vs line')}"
-            )
-        ),
-        inline=True,
     )
     embed.add_field(
         name="Player report",
@@ -319,11 +313,6 @@ def build_grade_embed(player, line, info, headshots=False):
         name="Player cons",
         value=_fmt_bullets(_pick(info, "Player cons", default=[]), limit=5),
         inline=True,
-    )
-    embed.add_field(
-        name="Recent exact totals",
-        value=_truncate(_fmt_list(_pick(info, recent_totals_key, default=[]))),
-        inline=False,
     )
     embed.add_field(
         name="Distribution",
@@ -380,13 +369,13 @@ def build_data_embed(player, info):
     embed.add_field(
         name="Profile buckets",
         value=(
-            f"Firepower: {_pick(info, 'Firepower')}/100\n"
-            f"Entrying: {_pick(info, 'Entrying')}/100\n"
-            f"Trading: {_pick(info, 'Trading')}/100\n"
-            f"Opening: {_pick(info, 'Opening')}/100\n"
-            f"Clutching: {_pick(info, 'Clutching')}/100\n"
-            f"Sniping: {_pick(info, 'Sniping')}/100\n"
-            f"Utility: {_pick(info, 'Utility')}/100"
+            f"Firepower: {_pick(info, 'Firepower')}\n"
+            f"Entrying: {_pick(info, 'Entrying')}\n"
+            f"Trading: {_pick(info, 'Trading')}\n"
+            f"Opening: {_pick(info, 'Opening')}\n"
+            f"Clutching: {_pick(info, 'Clutching')}\n"
+            f"Sniping: {_pick(info, 'Sniping')}\n"
+            f"Utility: {_pick(info, 'Utility')}"
         ),
         inline=True,
     )
@@ -415,15 +404,6 @@ def build_data_embed(player, info):
             f"Top 50: {_pick(info, 'Vs Top 50 rating')}\n"
             f"Similar teams: {_pick(info, 'Similar teams')}\n"
             f"Similar teams rating: {_pick(info, 'Similar teams rating')}"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Advanced metrics",
-        value=(
-            f"Recent blowouts: {_pick(info, 'Recent blowouts')}\n"
-            f"OT probability: {_pick(info, 'OT probability')}\n"
-            f"2k+ rounds: {_pick(info, '2k+ rounds')}"
         ),
         inline=False,
     )
