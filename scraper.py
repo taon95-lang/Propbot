@@ -19,19 +19,34 @@ print = functools.partial(print, flush=True)
 
 import requests as _plain_requests
 
-# Force curl_cffi as the primary engine to bypass Cloudflare for free
-try:
-    from curl_cffi import requests as _cffi_requests
-    # Using chrome120 for better stealth compatibility
-    _http_get = lambda url, **kw: _cffi_requests.get(url, impersonate="chrome120", **kw)
-    print("HTTP engine: curl_cffi (Forced Primary — TLS fingerprinting active)")
-except Exception as e:
-    # Absolute baseline fallback if curl_cffi fails to import
-    _http_get = _plain_requests.get
-    print(f"HTTP engine: requests fallback (curl_cffi failed to import: {e})")
+SCRAPERAPI_KEY = os.environ.get("SCRAPERAPI_KEY", "")
 
+# Routing engine function
+def _http_get(url, **kw):
+    # Prioritize ScraperAPI if the key is configured
+    if SCRAPERAPI_KEY:
+        proxy_url = "http://api.scraperapi.com"
+        params = {
+            'api_key': SCRAPERAPI_KEY,
+            'url': url,
+            'bypass': 'cloudflare'  # Tells ScraperAPI to deploy specific bypass rules
+        }
+        # Pop standard headers/kwargs that might conflict with proxy headers
+        kw.pop('headers', None)
+        return _plain_requests.get(proxy_url, params=params, **kw)
+    
+    # Fallback to local free curl_cffi if no API key is available
+    try:
+        from curl_cffi import requests as _cffi_requests
+        return _cffi_requests.get(url, impersonate="chrome120", **kw)
+    except Exception as e:
+        # Final baseline fallback
+        return _plain_requests.get(url, **kw)
+
+print("HTTP engine: ScraperAPI Proxy routing with curl_cffi fallback active")
 
 HLTV_BASE = "https://www.hltv.org"
+
 
 SCRAPERAPI_KEY = os.environ.get("SCRAPERAPI_KEY", "")
 SCRAPER_PROXY_URL = os.environ.get("SCRAPER_PROXY_URL", "")
