@@ -329,9 +329,16 @@ def _value_near(
 
 
 def _extract_bucket_scores(lines: List[str]) -> Dict[str, str]:
+    """Extract numeric attribute scores (e.g. "84/100") and strip '/100' to get just the number."""
     buckets: Dict[str, str] = {}
     for label in ATTR_BUCKET_KEYS:
-        buckets[label] = _value_near(lines, label, r"(\d{1,3}/100)", window=6, exact=True) or "N/A"
+        val = _value_near(lines, label, r"(\d{1,3}/100)", window=6, exact=True)
+        if not val:
+            val = _value_near(lines, label, r"(\d{1,3}/100)", window=6, exact=False)
+        if val and val != "N/A":
+            buckets[label] = val.replace("/100", "")
+        else:
+            buckets[label] = "N/A"
     return buckets
 
 
@@ -437,7 +444,8 @@ def _series_stat_average(rows: List[Dict[str, Any]], field: str) -> Optional[flo
 def _profile_bucket_role(buckets: Dict[str, str]) -> Tuple[str, str]:
     scores: Dict[str, float] = {}
     for key, value in buckets.items():
-        m = re.search(r"(\d{1,3})/100", str(value))
+        # Handle both "84/100" and "84" formats
+        m = re.search(r"(\d{1,3})(?:/100)?", str(value))
         if m:
             scores[key] = float(m.group(1))
 
@@ -582,6 +590,7 @@ def _build_stats_url(pid: str, slug: str, start_date: Optional[str] = None, end_
 
 
 def fetch_player_stats(pid: str, slug: str, start_date: Optional[str] = None, end_date: Optional[str] = None) -> Dict[str, str]:
+    """Fetch player performance stats from HLTV (e.g. rating, KAST, KPR, DPR, ADR, Round Swing)."""
     soup, _, _ = _get_soup(_build_stats_url(pid, slug, start_date, end_date), render=False)
     if not soup:
         soup, _, _ = _get_soup(_build_stats_url(pid, slug, start_date, end_date), render=True)
@@ -593,8 +602,30 @@ def fetch_player_stats(pid: str, slug: str, start_date: Optional[str] = None, en
     stats: Dict[str, str] = {}
     stats["Rating 2.0"] = _value_before(lines, "Rating 2.0", r"\d+\.\d+", lookback=4) or _value_near(lines, "Rating 2.0", r"(\d+\.\d+)", window=4, exact=True) or "N/A"
     stats["Rating 3.0 recent"] = _value_before(lines, "Rating 3.0", r"\d+\.\d+", lookback=4) or _value_near(lines, "Rating 3.0", r"(\d+\.\d+)", window=4, exact=True) or "N/A"
-    stats["Round swing"] = _value_near(lines, "Round swing", r"([+-]?\d+\.\d+%)", window=6, exact=True) or _extract_first_match(text, r"Round swing(?:.|\n){0,120}?([+-]?\d+\.\d+%)") or _extract_first_match(text, r"([+-]?\d+\.\d+%)\s+Round swing") or "N/A"
-    stats["KAST"] = _value_near(lines, "KAST", r"(\d+\.\d+%)", window=6, exact=True) or _extract_first_match(text, r"KAST(?:.|\n){0,120}?(\d+\.\d+%)") or _extract_first_match(text, r"(\d+\.\d+%)\s+KAST") or "N/A"
+    
+    # Round Swing: HLTV may list a decimal (e.g. 0.68) or percentage (e.g. +4.0%)
+    rs_match = _value_near(lines, "Round swing", r"([+-]?\d+\.\d+%?)", window=6, exact=True)
+    if not rs_match:
+        rs_match = _extract_first_match(text, r"([+-]?\d+\.\d+%?)\s+Round swing")
+    if rs_match:
+        # If no percent sign, convert decimal to percent
+        if rs_match.endswith("%"):
+            stats["Round swing"] = rs_match
+        else:
+            try:
+                val = float(rs_match)
+                stats["Round swing"] = f"{val*100:.1f}%"
+            except:
+                stats["Round swing"] = rs_match
+    else:
+        stats["Round swing"] = "N/A"
+    
+    # KAST (percentage)
+    kast_match = _value_near(lines, "KAST", r"(\d+\.\d+%)", window=7, exact=True)
+    if not kast_match:
+        kast_match = _extract_first_match(text, r"(\d+\.\d+%)\s+KAST")
+    stats["KAST"] = kast_match or "N/A"
+    
     stats["ADR"] = _value_near(lines, "ADR", r"(\d+\.\d+)", window=5, exact=True) or _extract_first_match(text, r"ADR(?:.|\n){0,80}?(\d+\.\d+)") or "N/A"
     stats["KPR"] = _value_near(lines, "KPR", r"(\d+\.\d+)", window=5, exact=True) or _extract_first_match(text, r"KPR(?:.|\n){0,80}?(\d+\.\d+)") or "N/A"
     stats["DPR"] = _value_near(lines, "DPR", r"(\d+\.\d+)", window=5, exact=True) or _extract_first_match(text, r"DPR(?:.|\n){0,80}?(\d+\.\d+)") or "N/A"
@@ -605,7 +636,11 @@ def fetch_player_stats(pid: str, slug: str, start_date: Optional[str] = None, en
     stats["Maps played"] = _value_near(lines, "Maps played", r"([\d,]+)", window=4, exact=False) or _extract_first_match(text, r"Maps played\s*([\d,]+)") or "N/A"
     stats["Rounds played"] = _value_near(lines, "Rounds played", r"([\d,]+)", window=4, exact=False) or _extract_first_match(text, r"Rounds played\s*([\d,]+)") or "N/A"
     for label in ATTR_BUCKET_KEYS:
-        stats[label] = _value_near(lines, label, r"(\d{1,3}/100)", window=6, exact=True) or "N/A"
+        val = _value_near(lines, label, r"(\d{1,3}/100)", window=6, exact=True) or "N/A"
+        if val and val != "N/A":
+            stats[label] = val.replace("/100", "")
+        else:
+            stats[label] = "N/A"
     for bucket in (5, 10, 20, 30, 50):
         label = f"vs top {bucket} opponents"
         stats[f"Vs Top {bucket} rating"] = _value_near(lines, label, r"(-|\d+\.\d+)", window=8, exact=False) or _extract_first_match(text, rf"vs top {bucket} opponents(?:.|\n){{0,80}}?(-|[0-9]+\.[0-9]+)") or "N/A"
@@ -961,6 +996,7 @@ def _analytics_url_from_match(match_url: str) -> Optional[str]:
 
 
 def fetch_match_context(match_url: Optional[str], player_team: str, opponent: str) -> Dict[str, Any]:
+    """Fetch context for a match: team ranks, odds, veto, etc. Includes fallback to fetch opponent team page for ranking."""
     if not match_url:
         return {}
     soup, _, html = _get_soup(match_url, render=True)
@@ -976,6 +1012,22 @@ def fetch_match_context(match_url: Optional[str], player_team: str, opponent: st
     veto, official_likely_maps = _extract_veto_and_maps(lines)
     player_rank = _extract_team_rank_from_lines(lines, resolved_player_team)
     opponent_rank = _extract_team_rank_from_lines(lines, resolved_opponent)
+    
+    # If opponent_rank is None, try fetching the opponent's team page
+    if opponent_rank is None and opponent_entry:
+        team_id = opponent_entry.get("id")
+        team_slug = opponent_entry.get("slug")
+        if team_id and team_slug:
+            try:
+                team_soup, _, _ = _get_soup(f"{HLTV_BASE}/team/{team_id}/{team_slug}", render=True)
+                if not team_soup:
+                    team_soup, _, _ = _get_soup(f"{HLTV_BASE}/team/{team_id}/{team_slug}", render=False)
+                if team_soup:
+                    team_lines = _lines_from_soup(team_soup)
+                    opponent_rank = _extract_team_rank_from_lines(team_lines, resolved_opponent)
+            except Exception:
+                pass
+    
     teams_for_display = [x for x in [resolved_player_team, resolved_opponent] if x]
     if len(teams_for_display) < 2:
         teams_for_display = [x.get("name", "") for x in team_links[:2] if x.get("name")]
@@ -1153,10 +1205,10 @@ def build_payload_analytics(payload: Dict[str, Any], line: float, kill_mode: boo
     h2h = payload.get("H2H Data", {}) or {}; likely_maps = payload.get("Likely maps", {}) or {}; per_map = payload.get("Per-map averages", {}) or {}
     projection = _safe_float(payload.get("Projected kills" if kill_mode else "Projected headshots")); recent_avg = _safe_float(payload.get("Recent average"))
     rating = _safe_float(payload.get("Rating 3.0")); kpr = _safe_float(payload.get("KPR")); dpr = _safe_float(payload.get("DPR")); adr = _safe_float(payload.get("ADR")); kast = _safe_pct_value(payload.get("KAST")); impact = _safe_float(payload.get("Impact"))
-    firepower = _safe_pct_value(str(payload.get("Firepower", "")).split("/")[0]) if "/" in str(payload.get("Firepower", "")) else None
-    opening = _safe_pct_value(str(payload.get("Opening", "")).split("/")[0]) if "/" in str(payload.get("Opening", "")) else None
-    entrying = _safe_pct_value(str(payload.get("Entrying", "")).split("/")[0]) if "/" in str(payload.get("Entrying", "")) else None
-    trading = _safe_pct_value(str(payload.get("Trading", "")).split("/")[0]) if "/" in str(payload.get("Trading", "")) else None
+    firepower = _safe_pct_value(str(payload.get("Firepower", "")).split("/")[0]) if "/" in str(payload.get("Firepower", "")) else _safe_pct_value(payload.get("Firepower", ""))
+    opening = _safe_pct_value(str(payload.get("Opening", "")).split("/")[0]) if "/" in str(payload.get("Opening", "")) else _safe_pct_value(payload.get("Opening", ""))
+    entrying = _safe_pct_value(str(payload.get("Entrying", "")).split("/")[0]) if "/" in str(payload.get("Entrying", "")) else _safe_pct_value(payload.get("Entrying", ""))
+    trading = _safe_pct_value(str(payload.get("Trading", "")).split("/")[0]) if "/" in str(payload.get("Trading", "")) else _safe_pct_value(payload.get("Trading", ""))
     similar_rating = _safe_float(payload.get("Similar teams rating")); over_prob = _safe_pct_value(payload.get("Over probability")); under_prob = _safe_pct_value(payload.get("Under probability")); hit_rate = _safe_pct_value(payload.get("Hit rate"))
     h2h_avg = _safe_float(h2h.get("h2h_avg_kills" if kill_mode else "h2h_avg_headshots")); h2h_sample = int(h2h.get("h2h_sample_size", 0) or 0)
     map_combo_note = _likely_map_combo_note(per_map, likely_maps, headshots=not kill_mode)
@@ -1318,6 +1370,13 @@ def _build_payload(player_name: str, line: float, opponent: str, kill_mode: bool
     total_hs_sample = sum(hs_samples) if hs_samples else 0
     recent_hs_pct = (total_hs_sample / total_kill_sample * 100.0) if total_kill_sample > 0 else None
 
+    # Compute additional metrics: blowouts, OT probability, 2k+ rounds
+    blowouts = sum(1 for row in raw_rows if abs(row.get("kills", 0) - row.get("deaths", 0)) >= 9)
+    total_maps = len(raw_rows) if raw_rows else 1
+    ot_maps = sum(1 for row in raw_rows if int(row.get("rounds", 0)) >= 30)
+    ot_probability = (ot_maps / total_maps * 100.0) if total_maps > 0 else 0.0
+    multi_kill_rounds = sum(1 for row in hydrated_rows if int(row.get("kills", 0)) >= 2)
+
     payload = {
         "Player": display_name,
         "Opponent": resolved_opponent,
@@ -1395,6 +1454,9 @@ def _build_payload(player_name: str, line: float, opponent: str, kill_mode: bool
         "Sample note": "Exact series sample" if not fallback_used else "Fallback to exact map sample",
         "Recent stat window": f"{start_30} to {end_30}",
         "H2H window": f"{start_90 if 'start_90' in locals() else 'N/A'} to {end_90 if 'end_90' in locals() else 'N/A'}",
+        "Recent blowouts": blowouts,
+        "OT probability": f"{ot_probability:.1f}%",
+        "2k+ rounds": multi_kill_rounds,
     }
 
     payload.update(build_payload_analytics(payload, line=line, kill_mode=kill_mode))
