@@ -17,28 +17,22 @@ except Exception:
 
 print = functools.partial(print, flush=True)
 
-# Primary: cloudscraper (bypasses Cloudflare JS challenges + spoofs TLS/JA3)
-# Fallback: curl_cffi (also spoofs TLS fingerprint), then plain requests
+import requests as _plain_requests
+
+# Force curl_cffi as the primary engine to bypass Cloudflare for free
 try:
-    import cloudscraper
-    _cloudscraper_session = cloudscraper.create_scraper(
-        browser={"browser": "chrome", "platform": "windows", "desktop": True}
-    )
-    _http_get = _cloudscraper_session.get
-    print("HTTP engine: cloudscraper (Cloudflare bypass active)")
-except Exception:
-    _cloudscraper_session = None
-    try:
-        from curl_cffi import requests as _cffi_requests
-        _http_get = lambda url, **kw: _cffi_requests.get(url, impersonate="chrome110", **kw)
-        print("HTTP engine: curl_cffi (TLS fingerprint spoofing active)")
-    except Exception:
-        import requests as _plain_requests
-        _http_get = _plain_requests.get
-        print("HTTP engine: requests (fallback — may be blocked by Cloudflare)")
+    from curl_cffi import requests as _cffi_requests
+    # Using chrome120 for better stealth compatibility
+    _http_get = lambda url, **kw: _cffi_requests.get(url, impersonate="chrome120", **kw)
+    print("HTTP engine: curl_cffi (Forced Primary — TLS fingerprinting active)")
+except Exception as e:
+    # Absolute baseline fallback if curl_cffi fails to import
+    _http_get = _plain_requests.get
+    print(f"HTTP engine: requests fallback (curl_cffi failed to import: {e})")
 
 
 HLTV_BASE = "https://www.hltv.org"
+
 SCRAPERAPI_KEY = os.environ.get("SCRAPERAPI_KEY", "")
 SCRAPER_PROXY_URL = os.environ.get("SCRAPER_PROXY_URL", "")
 
