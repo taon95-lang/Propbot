@@ -1427,15 +1427,28 @@ def get_headshot_info(player_name: str, line: float = 0.0, opponent: str = "N/A"
 # =====================================================================
 
 import urllib.parse
-import undetected_chromedriver as uc
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, WebDriverException
 
 
 class CS2DataExtractor:
     def __init__(self):
+        # Lazy imports so missing packages don't crash the bot on startup
+        try:
+            import undetected_chromedriver as uc
+            from selenium.webdriver.common.by import By
+            from selenium.webdriver.support.ui import WebDriverWait
+            from selenium.webdriver.support import expected_conditions as EC
+            from selenium.common.exceptions import TimeoutException, WebDriverException
+        except ImportError as e:
+            raise ImportError(
+                f"CS2DataExtractor requires undetected-chromedriver and selenium: {e}"
+            )
+
+        self._By = By
+        self._WebDriverWait = WebDriverWait
+        self._EC = EC
+        self._TimeoutException = TimeoutException
+        self._WebDriverException = WebDriverException
+
         print(" Initializing stealth browser environment...")
         options = uc.ChromeOptions()
         options.add_argument('--headless')
@@ -1450,7 +1463,7 @@ class CS2DataExtractor:
         try:
             self.driver = uc.Chrome(options=options)
             self.base_url = "https://www.hltv.org"
-            self.wait = WebDriverWait(self.driver, 15)
+            self.wait = self._WebDriverWait(self.driver, 15)
             print(" Stealth browser successfully initialized.")
         except Exception as e:
             print(f" Failed to initialize WebDriver: {e}")
@@ -1470,7 +1483,7 @@ class CS2DataExtractor:
         search_url = f"{self.base_url}/search?query={urllib.parse.quote(player_name)}"
         try:
             self.driver.get(search_url)
-            self.wait.until(EC.presence_of_element_located((By.CLASS_NAME, "table")))
+            self.wait.until(self._EC.presence_of_element_located((self._By.CLASS_NAME, "table")))
             soup = BeautifulSoup(self.driver.page_source, 'html.parser')
             profiles = soup.find_all('a', href=re.compile(r'/player/\d+/'))
             for profile in profiles:
@@ -1481,10 +1494,10 @@ class CS2DataExtractor:
                     return resolved_url
             print(f" Entity '{player_name}' not found in search results.")
             return None
-        except TimeoutException:
+        except self._TimeoutException:
             print(f" Search request timed out for {player_name}. WAF block or empty page.")
             return None
-        except WebDriverException as e:
+        except self._WebDriverException as e:
             print(f" WebDriver crashed during entity resolution: {e}")
             return None
 
