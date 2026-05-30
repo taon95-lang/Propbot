@@ -17,72 +17,29 @@ except Exception:
 
 print = functools.partial(print, flush=True)
 
-import requests as _plain_requests
+try:
+    from curl_cffi import requests as requests
+except Exception:
+    import requests
 
-SCRAPERAPI_KEY = os.environ.get("SCRAPERAPI_KEY", "")
-
-# Routing engine function
-def _http_get(url, **kw):
-    # Prioritize ScraperAPI if the key is configured
-    if SCRAPERAPI_KEY:
-        proxy_url = "http://api.scraperapi.com"
-        params = {
-            'api_key': SCRAPERAPI_KEY,
-            'url': url,
-            'bypass': 'cloudflare'  # Tells ScraperAPI to deploy specific bypass rules
-        }
-        # Pop standard headers/kwargs that might conflict with proxy headers
-        kw.pop('headers', None)
-        return _plain_requests.get(proxy_url, params=params, **kw)
-    
-    # Fallback to local free curl_cffi if no API key is available
-    try:
-        from curl_cffi import requests as _cffi_requests
-        return _cffi_requests.get(url, impersonate="chrome120", **kw)
-    except Exception as e:
-        # Final baseline fallback
-        return _plain_requests.get(url, **kw)
-
-print("HTTP engine: ScraperAPI Proxy routing with curl_cffi fallback active")
 
 HLTV_BASE = "https://www.hltv.org"
-
-
-
 SCRAPERAPI_KEY = os.environ.get("SCRAPERAPI_KEY", "")
-SCRAPER_PROXY_URL = os.environ.get("SCRAPER_PROXY_URL", "")
 
 REQUEST_TIMEOUT = 22
 FETCH_RETRIES = 3
 MAX_RECENT_MAPS = 40
 MAX_RECENT_SERIES = 10
 
-# Production-grade browser headers — match a real Chrome on Windows session.
-# Sec-Ch-Ua, Sec-Fetch-* and Accept headers prevent header-anomaly detection.
 DEFAULT_HEADERS = {
     "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/125.0.0.0 Safari/537.36"
     ),
-    "Accept": (
-        "text/html,application/xhtml+xml,application/xml;q=0.9,"
-        "image/avif,image/webp,image/apng,*/*;q=0.8,"
-        "application/signed-exchange;v=b3;q=0.7"
-    ),
     "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Sec-Ch-Ua": '"Google Chrome";v="125", "Chromium";v="125", "Not.A/Brand";v="24"',
-    "Sec-Ch-Ua-Mobile": "?0",
-    "Sec-Ch-Ua-Platform": '"Windows"',
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1",
-    "Upgrade-Insecure-Requests": "1",
     "Cache-Control": "no-cache",
     "Pragma": "no-cache",
-    "Connection": "keep-alive",
 }
 
 FETCH_CACHE: Dict[Tuple[str, bool], Tuple[Optional[str], Optional[str]]] = {}
@@ -210,8 +167,6 @@ def _fetch(url: str, render: Optional[bool] = None) -> Tuple[Optional[str], Opti
 
     encoded = quote_plus(url, safe=":/?=&")
     target = url
-
-    # ScraperAPI takes priority when a key is configured (handles rendering + residential IPs)
     if SCRAPERAPI_KEY:
         target = (
             "http://api.scraperapi.com"
@@ -222,34 +177,21 @@ def _fetch(url: str, render: Optional[bool] = None) -> Tuple[Optional[str], Opti
             "&keep_headers=true"
         )
 
-    # Build proxy dict for residential proxy rotation (masks datacenter IP)
-    proxies: Optional[Dict[str, str]] = None
-    if SCRAPER_PROXY_URL and not SCRAPERAPI_KEY:
-        proxies = {"http": SCRAPER_PROXY_URL, "https": SCRAPER_PROXY_URL}
-        print(f"PROXY active: routing through residential proxy for {url}")
-
     for attempt in range(1, FETCH_RETRIES + 1):
         try:
-            kwargs: Dict[str, Any] = {"timeout": REQUEST_TIMEOUT, "headers": DEFAULT_HEADERS}
-            if proxies:
-                kwargs["proxies"] = proxies
-            resp = _http_get(target, **kwargs)
-            status = getattr(resp, "status_code", 0)
-            if status == 200 and getattr(resp, "text", None):
+            resp = requests.get(target, timeout=REQUEST_TIMEOUT, headers=DEFAULT_HEADERS)
+            if getattr(resp, "status_code", 0) == 200 and getattr(resp, "text", None):
                 final_url = resp.headers.get("Sa-Final-Url") or url
                 FETCH_CACHE[cache_key] = (resp.text, final_url)
                 return resp.text, final_url
-            print(f"FETCH FAILED {attempt}/{FETCH_RETRIES}: {url} -> {status}")
+            print(f"FETCH FAILED {attempt}/{FETCH_RETRIES}: {url} -> {getattr(resp, 'status_code', 'ERR')}")
         except Exception as exc:
             print(f"FETCH EXCEPTION {attempt}/{FETCH_RETRIES}: {url} -> {exc}")
-        time.sleep(1.5 * attempt)  # exponential-style back-off to avoid rate limits
+        time.sleep(1)
 
-    # Graceful fallback: if render=True failed, retry without JS rendering
     if SCRAPERAPI_KEY and render:
-        print(f"FALLBACK: retrying {url} without render=True")
         return _fetch(url, render=False)
 
-    print(f"FETCH EXHAUSTED: all {FETCH_RETRIES} attempts failed for {url}")
     FETCH_CACHE[cache_key] = (None, None)
     return None, None
 
@@ -1477,3 +1419,144 @@ def get_headshot_info(player_name: str, line: float = 0.0, opponent: str = "N/A"
     except Exception as exc:
         print(f"CRITICAL FAILURE in get_headshot_info: {exc}")
         return {"error": str(exc)}
+
+
+# =====================================================================
+# CS2DataExtractor — Selenium-based extractor for the !grade command
+# Merged from the blueprint scraper module
+# =====================================================================
+
+import urllib.parse
+import undetected_chromedriver as uc
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, WebDriverException
+
+
+class CS2DataExtractor:
+    def __init__(self):
+        print(" Initializing stealth browser environment...")
+        options = uc.ChromeOptions()
+        options.add_argument('--headless')
+        options.add_argument('--disable-gpu')
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-blink-features=AutomationControlled')
+        options.add_argument(
+            '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+            'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        )
+        try:
+            self.driver = uc.Chrome(options=options)
+            self.base_url = "https://www.hltv.org"
+            self.wait = WebDriverWait(self.driver, 15)
+            print(" Stealth browser successfully initialized.")
+        except Exception as e:
+            print(f" Failed to initialize WebDriver: {e}")
+            raise
+
+    def _sanitize_metric(self, value_str):
+        if not value_str or isinstance(value_str, str) and value_str.strip() in ['N/A', '-', '', 'null']:
+            return 0.0
+        cleaned = str(value_str).replace('%', '').strip()
+        try:
+            return float(cleaned)
+        except ValueError:
+            return 0.0
+
+    def resolve_player_entity(self, player_name):
+        print(f" Attempting entity resolution for: {player_name}")
+        search_url = f"{self.base_url}/search?query={urllib.parse.quote(player_name)}"
+        try:
+            self.driver.get(search_url)
+            self.wait.until(EC.presence_of_element_located((By.CLASS_NAME, "table")))
+            soup = BeautifulSoup(self.driver.page_source, 'html.parser')
+            profiles = soup.find_all('a', href=re.compile(r'/player/\d+/'))
+            for profile in profiles:
+                name_in_profile = profile.text.strip().lower()
+                if player_name.lower() in name_in_profile:
+                    resolved_url = self.base_url + profile['href']
+                    print(f" Entity resolved successfully: {resolved_url}")
+                    return resolved_url
+            print(f" Entity '{player_name}' not found in search results.")
+            return None
+        except TimeoutException:
+            print(f" Search request timed out for {player_name}. WAF block or empty page.")
+            return None
+        except WebDriverException as e:
+            print(f" WebDriver crashed during entity resolution: {e}")
+            return None
+
+    def extract_player_statistics(self, profile_url):
+        if not profile_url:
+            return None
+        try:
+            self.driver.get(profile_url)
+            time.sleep(2.5)
+            soup = BeautifulSoup(self.driver.page_source, 'html.parser')
+
+            stats = {
+                "name": "Unknown",
+                "kast_percent": 0.0,
+                "multi_kill_percent": 0.0,
+                "rating_3": 0.0,
+                "impact_rating": 0.0,
+                "opponent_rank_modifier": "N/A",
+                "attributes": {
+                    "firepower": 0, "entrying": 0, "trading": 0,
+                    "opening": 0, "clutching": 0, "sniping": 0, "utility": 0
+                }
+            }
+
+            name_node = soup.find('h1', class_='playerNickname')
+            if name_node:
+                stats['name'] = name_node.text.strip()
+
+            stat_rows = soup.find_all('div', class_='summaryStatBreakdownRow')
+            for row in stat_rows:
+                label = row.find('div', class_='summaryStatBreakdownDataLabel')
+                value = row.find('div', class_='summaryStatBreakdownDataValue')
+                if label and value:
+                    lbl_text = label.text.strip().upper()
+                    val_text = value.text.strip()
+                    if 'KAST' in lbl_text:
+                        stats['kast_percent'] = self._sanitize_metric(val_text)
+                    elif 'RATING' in lbl_text:
+                        stats['rating_3'] = self._sanitize_metric(val_text)
+                    elif 'IMPACT' in lbl_text:
+                        stats['impact_rating'] = self._sanitize_metric(val_text)
+
+            mk_node = soup.find(string=re.compile("Multi-kill", re.IGNORECASE))
+            if mk_node:
+                parent_div = mk_node.find_parent('div', class_='stat')
+                if parent_div:
+                    mk_val = parent_div.find('span', class_='value')
+                    if mk_val:
+                        stats['multi_kill_percent'] = self._sanitize_metric(mk_val.text)
+
+            # Fixed: was incomplete in original blueprint
+            attribute_labels = ["Firepower", "Entrying", "Trading", "Opening", "Clutching", "Sniping", "Utility"]
+            for attr in attribute_labels:
+                attr_node = soup.find(string=re.compile(attr, re.IGNORECASE))
+                if attr_node:
+                    score_parent = attr_node.find_parent('div')
+                    if score_parent:
+                        score_text = score_parent.text
+                        match = re.search(r'(\d{1,3})/100', score_text)
+                        if match:
+                            stats['attributes'][attr.lower()] = int(match.group(1))
+
+            return stats
+
+        except Exception as e:
+            print(f" Failed to extract statistics from {profile_url}: {e}")
+            return None
+
+    def close(self):
+        print(" Terminating stealth browser session...")
+        try:
+            self.driver.quit()
+            print(" Session terminated successfully.")
+        except Exception:
+            pass
