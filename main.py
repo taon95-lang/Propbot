@@ -27,7 +27,7 @@ class PropositionGrader:
             return self._format_response(
                 player_name,
                 "ERROR",
-                details="Player entity could not be resolved. Check spelling and ensure the player has an HLTV profile."
+                details="Player entity could not be resolved in the database. Ensure name spelling is correct."
             )
 
         stats = self.extractor.extract_player_statistics(profile_url)
@@ -35,7 +35,7 @@ class PropositionGrader:
             return self._format_response(
                 player_name,
                 "ERROR",
-                details="Failed to extract a complete statistical profile. DOM may have shifted or sample is empty."
+                details="Failed to extract a complete statistical profile. The DOM may have shifted or the sample is empty."
             )
 
         result = "PENDING"
@@ -48,47 +48,33 @@ class PropositionGrader:
             return self._format_response(player_name, "ERROR", details=f"Invalid proposition line value: {line_value}")
 
         if prop_type in ("KILLS", "KILL"):
-            # ── MR12-correct projection ─────────────────────────────────────────
-            # E[K] = KPR × E[rounds over 2 maps]
-            # MR12 regulation mean ≈ 20.4 rounds/map → 40.8 rounds for 2 maps.
-            # OT probability ≈ 25% per map; expected OT bonus ≈ 0.25 × 6 × 2 = 3 rounds.
-            # Conservative default when KPR not directly available: derive from rating_3.
-            # rating_3 correlates to KPR via empirical factor ~0.43 (not 0.70 which was MR15).
-            kpr_derived = stats['rating_3'] * 0.43
-            expected_rounds_2map = 40.8 + 3.0   # regulation mean + OT adjustment
-            projected_total = round(kpr_derived * expected_rounds_2map, 2)
+            projected_kills_per_round = stats['rating_3'] * 0.70
+            projected_total = projected_kills_per_round * 21.0
             result = "OVER" if projected_total > line_value else "UNDER"
-            details = (
-                f"Projected Kills (MR12): {projected_total:.2f} | "
-                f"KPR derived: {kpr_derived:.3f} | "
-                f"Expected rounds (2-map): {expected_rounds_2map:.1f} | "
-                f"Rating 3.0: {stats['rating_3']}"
-            )
+            details = f"Projected Kills: {projected_total:.2f} | Base Rating 3.0: {stats['rating_3']}"
 
         elif prop_type == "KAST":
             actual_kast = stats['kast_percent']
             if actual_kast == 0.0:
                 return self._format_response(player_name, "INSUFFICIENT_DATA", details="KAST returned 0.0. Sample size too small.")
             result = "OVER" if actual_kast > line_value else "UNDER"
-            details = f"Actual Historical KAST: {actual_kast}% | Line: {line_value}%"
+            details = f"Actual Historical KAST: {actual_kast}% | Line to Beat: {line_value}%"
 
         elif prop_type == "MULTI_KILL":
             actual_mk = stats['multi_kill_percent']
             if actual_mk == 0.0:
                 return self._format_response(player_name, "INSUFFICIENT_DATA", details="Multi-Kill % returned 0.0.")
             result = "OVER" if actual_mk > line_value else "UNDER"
-            details = f"Actual Multi-Kill %: {actual_mk}% | Line: {line_value}%"
+            details = f"Actual Multi-Kill %: {actual_mk}% | Line to Beat: {line_value}%"
 
         elif prop_type in ("FIRST_KILL", "FK"):
             opening_score = stats['attributes']['opening']
             if opening_score == 0:
                 return self._format_response(player_name, "INSUFFICIENT_DATA", details="0-100 Opening attribute missing.")
-            # Opening attribute / 100 gives approximate per-round FK probability
             implied_prob = opening_score / 100.0
-            # FK opportunities per 2-map MR12 series ≈ 43.8 rounds (with OT)
-            projected_fk = round(implied_prob * 43.8, 2)
+            projected_fk = implied_prob * 21.0
             result = "OVER" if projected_fk > line_value else "UNDER"
-            details = f"Opening Attribute: {opening_score}/100 | Projected First Kills (MR12 2-map): {projected_fk:.2f}"
+            details = f"Opening Attribute: {opening_score}/100 | Projected First Kills: {projected_fk:.2f}"
 
         elif prop_type == "HEADSHOTS":
             firepower_score = stats['attributes']['firepower']
@@ -96,7 +82,7 @@ class PropositionGrader:
             details = f"Firepower Attribute: {firepower_score}/100"
 
         else:
-            return self._format_response(player_name, "ERROR", details=f"Unsupported proposition type: {prop_type}")
+            return self._format_response(player_name, "ERROR", details=f"Unsupported proposition type requested: {prop_type}")
 
         return self._format_response(
             player_name=stats['name'],
@@ -262,14 +248,12 @@ def build_scan_embed(player, line, opponent, info):
     embed.add_field(
         name="Quick view",
         value=_truncate(
-            f"Pace projection (KPR×rounds): {_pick(info, 'Pace projection')}\n"
-            f"Raw avg (historical): {_pick(info, 'Raw avg projection')}\n"
-            f"Models converge: {_pick(info, 'Models converge')}\n"
-            f"Expected rounds 2-map: {_pick(info, 'Expected rounds 2map')}\n"
-            f"KPR derived: {_pick(info, 'KPR derived')}\n"
+            f"Recent avg: {_pick(info, 'Recent average')}\n"
+            f"Recent median: {_pick(info, 'Recent median')}\n"
+            f"Projection: {_pick(info, 'Projected kills', 'Recent projection')}\n"
             f"Hit rate: {_pick(info, 'Hit rate')}\n"
-            f"Over/Under prob: {_pick(info, 'Over probability')} / {_pick(info, 'Under probability')}\n"
-            f"Edge (kills vs line): {_pick(info, 'Pace edge kills')}\n"
+            f"Over/Under: {_pick(info, 'Over probability')} / {_pick(info, 'Under probability')}\n"
+            f"Edge: {_pick(info, 'Edge vs line')}\n"
             f"Recommendation: {_pick(info, 'Bet recommendation')}\n"
             f"Grade: {_pick(info, 'Final grade')}"
         ),
@@ -343,17 +327,13 @@ def build_grade_embed(player, line, info, headshots=False):
         name="Projection / edge",
         value=_truncate(
             f"Line: {line}\n"
-            f"Pace projection (PRIMARY): {_pick(info, 'Pace projection')}\n"
-            f"Raw avg (reference): {_pick(info, 'Raw avg projection') if not headshots else _pick(info, 'Recent HS Average')}\n"
+            f"Projection: {_pick(info, projection_key, 'Recent projection')}\n"
             f"Recent avg: {_pick(info, 'Recent average') if not headshots else _pick(info, 'Recent HS Average')}\n"
             f"Recent median: {_pick(info, 'Recent median') if not headshots else _pick(info, 'Recent HS Median')}\n"
-            f"Models converge: {_pick(info, 'Models converge')}\n"
-            f"Pace side: {_pick(info, 'Pace side')} | History side: {_pick(info, 'History side')}\n"
-            f"Expected rounds 2-map (MR12): {_pick(info, 'Expected rounds 2map')}\n"
-            f"Pace edge (kills): {_pick(info, 'Pace edge kills')}\n"
             f"Over probability: {_pick(info, 'Over probability')}\n"
             f"Under probability: {_pick(info, 'Under probability')}\n"
             f"Hit rate: {_pick(info, 'Hit rate')}\n"
+            f"Edge: {_pick(info, 'Edge vs line')}\n"
             f"Recommendation: {_pick(info, 'Bet recommendation')}\n"
             f"Grade: {_pick(info, 'Final grade')}\n"
             f"Mispriced: {_pick(info, 'Mispriced or not')}"
@@ -472,13 +452,6 @@ def build_raw_embed(player, info):
         description="Raw exact maps plus exact paired 2-map series rows",
         color=discord.Color.dark_teal(),
     )
-    legacy_filtered = _pick(info, "MR15 legacy rows filtered", default=0)
-    if legacy_filtered and int(legacy_filtered) > 0:
-        embed.add_field(
-            name="⚠️ MR15 legacy data warning",
-            value=f"{legacy_filtered} series row(s) had round counts consistent with CS:GO MR15 format and were excluded from round-projection calculations. Only MR12 (CS2) data drives the pace model.",
-            inline=False,
-        )
     embed.add_field(name="Paired series rows", value=_fmt_paired_rows(_pick(info, "Paired series rows", default=[])), inline=False)
     embed.add_field(name="Raw maps", value=_fmt_raw_maps(_pick(info, "Raw maps", default=[])), inline=False)
     embed.set_footer(text=f"Sample: {_pick(info, 'Sample')} | {_pick(info, 'Sample note')}")
@@ -582,7 +555,7 @@ async def scan(ctx, player: str = None, line: str = None, *, opponent: str = Non
     info = get_player_info(player, prop_line, opponent)
 
     if info.get("error"):
-        await msg.edit(content=f"Error: {info['error']}")
+        await msg.edit(content=f"❌ **{player}** — {info['error']}")
         return
 
     embed = build_scan_embed(player, prop_line, opponent, info)
@@ -606,7 +579,7 @@ async def hs(ctx, player: str = None, line: str = None, *, opponent: str = None)
     info = get_headshot_info(player, prop_line, opponent)
 
     if info.get("error"):
-        await msg.edit(content=f"Error: {info['error']}")
+        await msg.edit(content=f"❌ **{player}** — {info['error']}")
         return
 
     embed = build_grade_embed(player, prop_line, info, headshots=True)
