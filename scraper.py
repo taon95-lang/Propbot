@@ -101,18 +101,6 @@ MAP_NAMES = (
 TEAM_MAP_WINDOW_DAYS = 90
 H2H_WINDOW_DAYS = 90
 
-# ── Format constants ──────────────────────────────────────────────────
-# CS2 uses MR12: max 24 regulation rounds per map (first to 13).
-# Overtime adds 6 rounds per OT period (MR3 halves).
-MR12_REGULATION_ROUNDS_PER_MAP = 24
-MR12_OT_ROUNDS_PER_PERIOD = 6
-MR12_EXPECTED_REGULATION_ROUNDS_PER_MAP = 20.4   # binomial mean at p=0.5
-MR12_MAX_ROUNDS_2MAP_REGULATION = 48             # hard cap: 24 × 2
-MR12_MAX_ROUNDS_2MAP_WITH_DOUBLE_OT = 60         # 48 + 6 + 6 (1 OT each map)
-
-# Legacy MR15 cap — rows with total rounds > 48 for 2 maps are flagged as stale
-MR15_LEGACY_ROUND_THRESHOLD = 50
-
 
 def _norm(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).replace("\xa0", " ").strip()
@@ -549,56 +537,112 @@ def _profile_bucket_role(buckets: Dict[str, str]) -> Tuple[str, str]:
     return mapped.get(best_key, "Rifler"), f"Derived from HLTV buckets: {best_key} is the strongest profile category."
 
 
-# FIX: More robust player search - tries multiple URL patterns and broader link scanning
-def search_player(name: str) -> Optional[Tuple[str, str, str]]:
-    key = _slugify(name)
-    if key in STATIC_PLAYERS:
-        pid, slug = STATIC_PLAYERS[key]
-        return pid, slug, slug
+# ── Player search ────────────────────────────────────────────────────────────
+# Ambiguous handles (e.g. "divine", "sugar") can match multiple players across
+# CS2 and Valorant.  We apply three disambiguation rules in order:
+#   1. Exact slug match wins immediately.
+#   2. Among all /player/ results, prefer the one whose slug is a case-insensitive
+#      exact match of the queried name.
+#   3. If still ambiguous, prefer the result with the most HLTV match history
+#      (checked by attempting extract_history_rows on each candidate).
 
-    # Method 1: HLTV search page (rendered)
-    query = quote_plus(name.strip())
-    soup, final_url, _ = _get_soup(f"{HLTV_BASE}/search?query={query}", render=True)
+def _collect_player_candidates(soup: Optional[BeautifulSoup], final_url: Optional[str]) -> List[Tuple[str, str]]:
+    """Return a list of (pid, slug) pairs from a search result page."""
+    candidates: List[Tuple[str, str]] = []
+    seen: set = set()
 
     if final_url and "/player/" in final_url:
         m = re.search(r"/player/(\d+)/([^/?#]+)", final_url)
-        if m:
-            return m.group(1), m.group(2), m.group(2)
+        if m and m.group(1) not in seen:
+            seen.add(m.group(1))
+            candidates.append((m.group(1), m.group(2)))
 
     if soup:
         for a in soup.find_all("a", href=True):
             href = a.get("href", "")
             m = re.search(r"/player/(\d+)/([^/?#]+)", href)
-            if m:
-                return m.group(1), m.group(2), m.group(2)
+            if m and m.group(1) not in seen:
+                seen.add(m.group(1))
+                candidates.append((m.group(1), m.group(2)))
 
-    # Method 2: HLTV search without render
-    soup2, final_url2, _ = _get_soup(f"{HLTV_BASE}/search?query={query}", render=False)
-    if final_url2 and "/player/" in final_url2:
-        m = re.search(r"/player/(\d+)/([^/?#]+)", final_url2)
-        if m:
-            return m.group(1), m.group(2), m.group(2)
-    if soup2:
-        for a in soup2.find_all("a", href=True):
-            href = a.get("href", "")
-            m = re.search(r"/player/(\d+)/([^/?#]+)", href)
-            if m:
-                return m.group(1), m.group(2), m.group(2)
+    return candidates
 
-    # Method 3: Try stats search endpoint
-    stats_soup, _, _ = _get_soup(f"{HLTV_BASE}/stats/players?query={query}", render=False)
-    if stats_soup:
-        for a in stats_soup.find_all("a", href=True):
-            href = a.get("href", "")
-            m = re.search(r"/player/(\d+)/([^/?#]+)", href)
-            if m:
-                return m.group(1), m.group(2), m.group(2)
-            # Also check stats player links
-            m2 = re.search(r"/stats/players/(\d+)/([^/?#]+)", href)
-            if m2:
-                return m2.group(1), m2.group(2), m2.group(2)
 
+def _best_candidate(name: str, candidates: List[Tuple[str, str]]) -> Optional[Tuple[str, str, str]]:
+    """
+    Given a list of (pid, slug) candidates, pick the best one:
+      1. Exact slug match (case-insensitive) wins immediately.
+      2. Otherwise return the first candidate (HLTV ranks by relevance).
+    We intentionally do NOT verify match history here to keep search fast;
+    _build_payload handles the empty-history fallback.
+    """
+    name_key = _slugify(name)
+    for pid, slug in candidates:
+        if _slugify(slug) == name_key:
+            return pid, slug, slug
+    if candidates:
+        pid, slug = candidates[0]
+        return pid, slug, slug
     return None
+
+
+def search_player(name: str, team_hint: Optional[str] = None) -> Optional[Tuple[str, str, str]]:
+    """
+    Resolve a player handle to (pid, slug, display_slug).
+
+    Parameters
+    ----------
+    name       : player handle as typed by the user (e.g. "divine", "sugaR")
+    team_hint  : optional team name to prefer when multiple players share the
+                 same handle across games (e.g. "Bestia" disambiguates divine)
+    """
+    key = _slugify(name)
+    if key in STATIC_PLAYERS:
+        pid, slug = STATIC_PLAYERS[key]
+        return pid, slug, slug
+
+    query = quote_plus(name.strip())
+
+    # ── Method 1: HLTV search (rendered) ─────────────────────────────────────
+    soup, final_url, _ = _get_soup(f"{HLTV_BASE}/search?query={query}", render=True)
+    candidates = _collect_player_candidates(soup, final_url)
+
+    # ── Method 2: HLTV search (non-rendered fallback) ────────────────────────
+    if not candidates:
+        soup2, final_url2, _ = _get_soup(f"{HLTV_BASE}/search?query={query}", render=False)
+        candidates = _collect_player_candidates(soup2, final_url2)
+
+    # ── Method 3: Stats search endpoint ──────────────────────────────────────
+    if not candidates:
+        stats_soup, _, _ = _get_soup(f"{HLTV_BASE}/stats/players?query={query}", render=False)
+        if stats_soup:
+            for a in stats_soup.find_all("a", href=True):
+                href = a.get("href", "")
+                for pat in (r"/player/(\d+)/([^/?#]+)", r"/stats/players/(\d+)/([^/?#]+)"):
+                    m = re.search(pat, href)
+                    if m:
+                        candidates.append((m.group(1), m.group(2)))
+                        break
+
+    if not candidates:
+        return None
+
+    # ── Disambiguation: team_hint match ──────────────────────────────────────
+    # If a team hint was supplied, try to find a candidate whose HLTV profile
+    # page lists that team name.  This prevents cross-game false matches.
+    if team_hint and len(candidates) > 1:
+        team_key = _slugify(team_hint)
+        for pid, slug in candidates[:6]:  # only check first 6 to stay fast
+            profile_soup, _, _ = _get_soup(f"{HLTV_BASE}/player/{pid}/{slug}", render=False)
+            if not profile_soup:
+                continue
+            page_text = _slugify(profile_soup.get_text(" "))
+            if team_key in page_text:
+                print(f"Team-hint '{team_hint}' matched candidate {slug} (pid {pid})")
+                return pid, slug, slug
+
+    # ── Disambiguation: exact slug match first, else first result ────────────
+    return _best_candidate(name, candidates)
 
 
 # FIX: fetch_player_profile now passes soup to _extract_bucket_scores for richer extraction
@@ -884,18 +928,10 @@ def extract_history_rows(pid: str, slug: str) -> List[Dict[str, Any]]:
             opponent_name = _strip_score_suffix(cells[2]) if len(cells) > 2 else "UNK"
             team_id = team_slug = opponent_id = opponent_slug = None
         score_bits = re.findall(r"\((\d+)\)", row_text)
-        rounds_played = MR12_EXPECTED_REGULATION_ROUNDS_PER_MAP  # default to MR12 expected mean
-        mr15_legacy = False
+        rounds_played = 24
         if len(score_bits) >= 2:
             try:
                 rounds_played = int(score_bits[0]) + int(score_bits[1])
-                # Flag and clamp MR15 legacy rows (> 24 rounds on a single map is only
-                # possible in MR15 CS:GO regulation or deep OT — both inflate round counts)
-                if rounds_played > MR12_REGULATION_ROUNDS_PER_MAP:
-                    if rounds_played > MR12_REGULATION_ROUNDS_PER_MAP + MR12_OT_ROUNDS_PER_PERIOD:
-                        mr15_legacy = True  # almost certainly old CS:GO data
-                    # Allow up to 30 for one OT period; clamp anything beyond
-                    rounds_played = min(rounds_played, MR12_REGULATION_ROUNDS_PER_MAP + MR12_OT_ROUNDS_PER_PERIOD)
             except Exception:
                 pass
         rating_match = re.findall(r"\b(\d+\.\d+)\b", row_text)
@@ -915,7 +951,6 @@ def extract_history_rows(pid: str, slug: str) -> List[Dict[str, Any]]:
             "rounds": rounds_played,
             "mapstats_url": mapstats_url,
             "match_url": match_url,
-            "mr15_legacy": mr15_legacy,
         })
         if len(rows) >= MAX_RECENT_MAPS:
             break
@@ -971,12 +1006,6 @@ def pair_recent_series(rows: List[Dict[str, Any]], max_series: Optional[int] = M
         if len(chrono_maps) < 2:
             continue
         first_two = chrono_maps[:2]
-        combined_rounds = int(first_two[0].get("rounds", 0)) + int(first_two[1].get("rounds", 0))
-        # Hard cap: two MR12 maps + one OT each = 60 rounds maximum.
-        # Anything above 48 regulation rounds means at least one map went to OT;
-        # cap at 60 to prevent MR15-era data from inflating round projections.
-        combined_rounds = min(combined_rounds, MR12_MAX_ROUNDS_2MAP_WITH_DOUBLE_OT)
-        any_legacy = any(m.get("mr15_legacy", False) for m in first_two)
         paired.append({
             "date": first_two[0].get("date", "N/A"),
             "team": first_two[0].get("team", "N/A"),
@@ -990,10 +1019,9 @@ def pair_recent_series(rows: List[Dict[str, Any]], max_series: Optional[int] = M
             "kills": int(first_two[0].get("kills", 0)) + int(first_two[1].get("kills", 0)),
             "deaths": int(first_two[0].get("deaths", 0)) + int(first_two[1].get("deaths", 0)),
             "headshots": int(first_two[0].get("headshots", 0)) + int(first_two[1].get("headshots", 0)),
-            "rounds": combined_rounds,
+            "rounds": int(first_two[0].get("rounds", 0)) + int(first_two[1].get("rounds", 0)),
             "rating_avg": round(mean([_safe_float(first_two[0].get("rating")) or 0.0, _safe_float(first_two[1].get("rating")) or 0.0]), 2),
             "maps_in_series": len(chrono_maps),
-            "mr15_legacy": any_legacy,
             "raw_maps": first_two,
         })
         if max_series is not None and len(paired) >= max_series:
@@ -1107,14 +1135,7 @@ def _build_scenarios(series_rows: List[Dict[str, Any]], total_kills: int, total_
     if not series_rows or total_rounds <= 0:
         return {}
 
-    # Only use MR12-clean rows for round percentile calculations
-    rounds = [
-        int(row.get("rounds", 0))
-        for row in series_rows
-        if int(row.get("rounds", 0)) > 0 and not row.get("mr15_legacy", False)
-    ]
-    if not rounds:
-        rounds = [int(row.get("rounds", 0)) for row in series_rows if int(row.get("rounds", 0)) > 0]
+    rounds = [int(row.get("rounds", 0)) for row in series_rows if int(row.get("rounds", 0)) > 0]
     if not rounds:
         return {}
 
@@ -1125,11 +1146,6 @@ def _build_scenarios(series_rows: List[Dict[str, Any]], total_kills: int, total_
         short_rounds = ordered[max(0, int(0.25 * (len(ordered) - 1)))]
         norm_rounds = ordered[len(ordered) // 2]
         long_rounds = ordered[max(0, int(0.75 * (len(ordered) - 1)))]
-
-    # Hard cap all scenario round projections to MR12 maximum
-    short_rounds = min(float(short_rounds), float(MR12_MAX_ROUNDS_2MAP_WITH_DOUBLE_OT))
-    norm_rounds = min(float(norm_rounds), float(MR12_MAX_ROUNDS_2MAP_WITH_DOUBLE_OT))
-    long_rounds = min(float(long_rounds), float(MR12_MAX_ROUNDS_2MAP_WITH_DOUBLE_OT))
 
     kpr = total_kills / total_rounds
     return {
@@ -1716,35 +1732,7 @@ def _choose_similar_bucket(opponent_rank: Optional[int], stats: Dict[str, str]) 
     return f"Outside Top 50 (opponent rank #{opponent_rank})", "N/A"
 
 
-def _grade(abs_edge: float, side_hit_rate: float, models_converge: bool = True, pace_edge_kills: Optional[float] = None) -> str:
-    """
-    Grade a prop recommendation.
-
-    Parameters
-    ----------
-    abs_edge          : absolute probability edge vs 50% (from bootstrap simulation)
-    side_hit_rate     : historical hit rate on the recommended side
-    models_converge   : True if pace-adjusted projection and raw avg agree on the same side
-    pace_edge_kills   : |pace_projection - line|; used as primary edge signal when available
-    """
-    # If pace model and historical average disagree, cap at NO BET regardless of other signals.
-    if not models_converge:
-        return "5.0/10 NO BET (models diverge)"
-
-    # Use kills-edge from pace model as primary signal when available.
-    # ELITE requires both a strong kill-edge AND a high historical hit rate.
-    if pace_edge_kills is not None:
-        if pace_edge_kills >= 6.0 and side_hit_rate >= 65 and abs_edge >= 15:
-            return "9.5/10 ELITE"
-        if pace_edge_kills >= 4.0 and side_hit_rate >= 60 and abs_edge >= 10:
-            return "8.5/10 STRONG"
-        if pace_edge_kills >= 2.5 and side_hit_rate >= 55 and abs_edge >= 5:
-            return "7.5/10 GOOD"
-        if pace_edge_kills >= 1.5 and abs_edge >= 3:
-            return "6.5/10 SMALL EDGE"
-        return "5.0/10 NO BET"
-
-    # Fallback when no pace_edge_kills (headshots or missing KPR)
+def _grade(abs_edge: float, side_hit_rate: float) -> str:
     if abs_edge >= 25 and side_hit_rate >= 70:
         return "9.5/10 ELITE"
     if abs_edge >= 18:
@@ -1757,9 +1745,11 @@ def _grade(abs_edge: float, side_hit_rate: float, models_converge: bool = True, 
 
 
 def _build_payload(player_name: str, line: float, opponent: str, kill_mode: bool = True) -> Dict[str, Any]:
-    result = search_player(player_name)
+    # Pass opponent as team_hint so search_player can disambiguate cross-game handles
+    # (e.g. "divine" from Bestia CS2 vs a Valorant player named "Divine")
+    result = search_player(player_name, team_hint=opponent if opponent and opponent.upper() != "N/A" else None)
     if not result:
-        return {"error": f"Could not find {player_name} on HLTV."}
+        return {"error": f"Could not find '{player_name}' on HLTV. Check the spelling of the player handle."}
 
     pid, slug, display_slug = result
     profile = fetch_player_profile(pid, slug)
@@ -1771,8 +1761,27 @@ def _build_payload(player_name: str, line: float, opponent: str, kill_mode: bool
     all_time_stats = fetch_player_stats(pid, slug)
 
     raw_rows = extract_history_rows(pid, slug)
+
+    # ── Retry with display_name slug if history came back empty ──────────────
+    # HLTV occasionally redirects to a different slug on the stats/players/matches
+    # page (e.g. "divine-cs" vs "divine").  Try the display name as an alternate slug.
+    if not raw_rows and display_name and _slugify(display_name) != _slugify(slug):
+        alt_slug = _slugify(display_name)
+        print(f"History empty for slug '{slug}', retrying with display_name slug '{alt_slug}'")
+        raw_rows = extract_history_rows(pid, alt_slug)
+        if raw_rows:
+            slug = alt_slug  # use the working slug going forward
+
     if not raw_rows:
-        return {"error": "No HLTV match history was found for this player."}
+        team_info = profile.get("team_name", "N/A")
+        resolved_display = display_name or slug
+        return {
+            "error": (
+                f"Resolved '{player_name}' to HLTV profile '{resolved_display}' "
+                f"(team: {team_info}, pid: {pid}) but no match history was found. "
+                f"If this is the wrong player, try a more specific name or check HLTV directly."
+            )
+        }
 
     hydrated_rows = hydrate_maps(raw_rows, slug, display_name)
     all_paired_rows = pair_recent_series(hydrated_rows, max_series=None)
@@ -1792,101 +1801,32 @@ def _build_payload(player_name: str, line: float, opponent: str, kill_mode: bool
     target_samples = kill_samples if kill_mode else hs_samples
     stats = _sample_stats(target_samples, line)
 
-    # ── Pace-adjusted projection (PRIMARY source of truth) ──────────────────
-    # The projection must always be KPR × expected rounds, NOT the raw average.
-    # The raw average is used as a secondary reference only for the convergence check.
-    #
-    # Expected rounds per 2-map series under MR12:
-    #   - Regulation mean per map ≈ 20.4 rounds (binomial, p=0.5)
-    #   - Two maps → 40.8 rounds baseline
-    #   - OT probability adjustment: +6 rounds per OT map expected
-    # We derive expected rounds from the player's own MR12-capped round history.
-
-    pace_projection: Optional[float] = None
-    kpr_value: Optional[float] = None
-    expected_rounds_2map: Optional[float] = None
-    legacy_rows_filtered = 0
-
     if target_samples and sample_rounds:
-        # Filter out any still-suspected MR15 legacy rows from round mean computation
-        clean_rounds = []
-        for i, row in enumerate((paired_rows if paired_rows else hydrated_rows[:10])):
-            r = int(row.get("rounds", 0))
-            if r > MR12_MAX_ROUNDS_2MAP_REGULATION and row.get("mr15_legacy", False):
-                legacy_rows_filtered += 1
-                continue
-            if r > 0:
-                clean_rounds.append(r)
-
-        # Fall back to full sample_rounds list if filtering removed everything
-        if not clean_rounds:
-            clean_rounds = [r for r in sample_rounds if r > 0]
-
-        total_rounds_sum = sum(sample_rounds)
-        total_stat_sum = sum(target_samples)
-
-        if total_rounds_sum > 0:
-            kpr_value = total_stat_sum / total_rounds_sum
-            expected_rounds_2map = median(clean_rounds) if clean_rounds else MR12_EXPECTED_REGULATION_ROUNDS_PER_MAP * 2
-            # Hard cap on projected round volume: cannot exceed 60 (2 maps × 24 + 2 OT periods)
-            expected_rounds_2map = min(expected_rounds_2map, float(MR12_MAX_ROUNDS_2MAP_WITH_DOUBLE_OT))
-            pace_projection = round(kpr_value * expected_rounds_2map, 1)
-
-    # Raw-average projection (secondary / sanity-check reference only)
-    raw_avg_projection: Optional[float] = None
-    if target_samples:
-        raw_avg_projection = round(mean(target_samples), 1)
-
-    # The FINAL projection that drives the recommendation is always pace-adjusted.
-    projection = pace_projection if pace_projection is not None else raw_avg_projection
+        total_rounds = sum(sample_rounds)
+        total_stat = sum(target_samples)
+        rate_per_round = total_stat / total_rounds if total_rounds else 0.0
+        projection = round(rate_per_round * median(sample_rounds), 1)
+    else:
+        total_rounds = total_stat = 0
+        projection = None
 
     recommendation = "NO BET"
     side_probability = None
     hit_rate = stats["hit_rate"]
 
-    # ── Convergence check (Blueprint Layer 3) ────────────────────────────────
-    # The pace-adjusted projection AND the raw historical average must agree on
-    # the same side of the line before a high-confidence grade can be issued.
-    # If they diverge (pace says OVER, history says UNDER or vice-versa), the
-    # matchup is volatile: cap grade at NO BET regardless of individual signal strength.
-    pace_side: Optional[str] = None
-    history_side: Optional[str] = None
-    models_converge = False
-
-    if pace_projection is not None and line > 0:
-        pace_side = "OVER" if pace_projection > line else "UNDER"
-    if raw_avg_projection is not None and line > 0:
-        history_side = "OVER" if raw_avg_projection > line else "UNDER"
-
-    if pace_side and history_side:
-        models_converge = (pace_side == history_side)
-    elif pace_side:
-        models_converge = True  # only pace available; trust it
-
     if stats["avg"] is not None and stats["over_probability"] is not None and stats["under_probability"] is not None and hit_rate is not None:
-        if pace_projection is not None and pace_projection > line and stats["over_probability"] >= 55 and hit_rate >= 55 and models_converge:
+        if stats["avg"] > line and stats["over_probability"] >= 55 and hit_rate >= 55:
             recommendation = "OVER"
             side_probability = stats["over_probability"]
-        elif pace_projection is not None and pace_projection < line and stats["under_probability"] >= 55 and (100 - hit_rate) >= 55 and models_converge:
+        elif stats["avg"] < line and stats["under_probability"] >= 55 and (100 - hit_rate) >= 55:
             recommendation = "UNDER"
             side_probability = stats["under_probability"]
         else:
             side_probability = max(stats["over_probability"], stats["under_probability"])
-            # Lean label when models diverge or probabilities are weak
-            if not models_converge and pace_side:
-                recommendation = f"{pace_side} lean (models diverge — pace says {pace_side}, history says {history_side or 'N/A'})"
-            elif pace_side:
-                recommendation = f"{pace_side} lean"
 
     edge_pct = (side_probability - 50.0) if side_probability is not None else None
-    side_hit_rate = hit_rate if recommendation.startswith("OVER") else (100.0 - hit_rate if hit_rate is not None else 0.0)
-    pace_edge_kills = abs(pace_projection - line) if pace_projection is not None and kill_mode else None
-    final_grade = _grade(
-        abs(edge_pct or 0.0),
-        side_hit_rate or 0.0,
-        models_converge=models_converge,
-        pace_edge_kills=pace_edge_kills,
-    )
+    side_hit_rate = hit_rate if recommendation == "OVER" else (100.0 - hit_rate if hit_rate is not None else 0.0)
+    final_grade = _grade(abs(edge_pct or 0.0), side_hit_rate or 0.0)
 
     team_name = profile.get("team_name", "N/A")
     match_url = _find_profile_match_url(profile.get("match_links", []), opponent)
@@ -1965,15 +1905,6 @@ def _build_payload(player_name: str, line: float, opponent: str, kill_mode: bool
         "Bet recommendation": recommendation,
         "Final grade": final_grade,
         "Mispriced or not": "YES" if (edge_pct is not None and abs(edge_pct) >= 5) else "NO",
-        "Pace projection": pace_projection if pace_projection is not None else "N/A",
-        "Raw avg projection": raw_avg_projection if raw_avg_projection is not None else "N/A",
-        "Models converge": models_converge,
-        "Pace side": pace_side or "N/A",
-        "History side": history_side or "N/A",
-        "Pace edge kills": round(pace_edge_kills, 2) if pace_edge_kills is not None else "N/A",
-        "Expected rounds 2map": round(expected_rounds_2map, 1) if expected_rounds_2map is not None else "N/A",
-        "KPR derived": round(kpr_value, 4) if kpr_value is not None else "N/A",
-        "MR15 legacy rows filtered": legacy_rows_filtered,
         "Recent average": round(stats["avg"], 2) if stats["avg"] is not None else "N/A",
         "Recent median": round(stats["median"], 1) if stats["median"] is not None else "N/A",
         "Recent projection": projection if projection is not None else "N/A",
@@ -2132,12 +2063,31 @@ class CS2DataExtractor:
             self.wait.until(self._EC.presence_of_element_located((self._By.CLASS_NAME, "table")))
             soup = BeautifulSoup(self.driver.page_source, 'html.parser')
             profiles = soup.find_all('a', href=re.compile(r'/player/\d+/'))
+
+            exact_match = None
+            first_match = None
+            name_key = re.sub(r'[^a-z0-9]', '', player_name.lower())
+
             for profile in profiles:
-                name_in_profile = profile.text.strip().lower()
-                if player_name.lower() in name_in_profile:
-                    resolved_url = self.base_url + profile['href']
-                    print(f" Entity resolved successfully: {resolved_url}")
-                    return resolved_url
+                href = profile.get('href', '')
+                slug_m = re.search(r'/player/\d+/([^/?#]+)', href)
+                slug = slug_m.group(1).lower() if slug_m else ''
+                slug_key = re.sub(r'[^a-z0-9]', '', slug)
+
+                if first_match is None:
+                    first_match = self.base_url + href
+
+                # Prefer exact slug match to avoid cross-game false positives
+                if slug_key == name_key or name_key in slug_key:
+                    exact_match = self.base_url + href
+                    print(f" Exact slug match: {exact_match}")
+                    break
+
+            resolved = exact_match or first_match
+            if resolved:
+                print(f" Entity resolved: {resolved}")
+                return resolved
+
             print(f" Entity '{player_name}' not found in search results.")
             return None
         except self._TimeoutException:
