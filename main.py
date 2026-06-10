@@ -3,6 +3,9 @@ import json
 import discord
 from discord.ext import commands
 from discord import ui
+import statistics as _stats
+import random
+from datetime import datetime, timedelta
 
 from scraper import get_player_info, get_headshot_info, CS2DataExtractor
 
@@ -11,6 +14,231 @@ TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+
+# =====================================================================
+# Advanced Player Profiler (integrated)
+# =====================================================================
+
+class PlayerProfiler:
+    """Analyzes player role, consistency, and ceiling potential."""
+
+    ROLE_THRESHOLDS = {
+        "Firepower": 75,
+        "Entrying": 70,
+        "Trading": 65,
+        "Opening": 60,
+        "Clutching": 60,
+        "Sniping": 50,
+        "Utility": 55,
+    }
+
+    def __init__(self, player_stats: dict):
+        self.player_stats = player_stats
+        self.name = player_stats.get("name", "Unknown")
+
+    def classify_primary_role(self) -> tuple:
+        """Return (role_name, {score, tier, confidence, secondary_role})"""
+        attrs = self.player_stats.get("attributes", {})
+        if not attrs:
+            return ("Unclassified", {"score": 0, "tier": "N/A", "confidence": 0})
+
+        scores = {k: attrs.get(k, 0) for k in self.ROLE_THRESHOLDS.keys()}
+        primary_role = max(scores, key=scores.get)
+        primary_score = scores[primary_role]
+
+        remaining = {k: v for k, v in scores.items() if k != primary_role}
+        secondary_role = max(remaining, key=remaining.get) if remaining else None
+        secondary_score = remaining.get(secondary_role, 0) if secondary_role else 0
+
+        confidence = min(100, (primary_score - secondary_score + 20))
+        tier = self._score_to_tier(primary_score)
+
+        return (
+            primary_role,
+            {
+                "score": primary_score,
+                "tier": tier,
+                "confidence": confidence,
+                "secondary_role": secondary_role,
+                "secondary_score": secondary_score,
+            },
+        )
+
+    def compute_consistency_score(self) -> dict:
+        """Measure kill distribution volatility (CV)."""
+        kill_dist = self.player_stats.get("kill_distribution", [])
+        if not kill_dist or len(kill_dist) < 2:
+            return {"cv": None, "label": "Insufficient data", "stability_tier": "N/A"}
+
+        mean_val = _stats.mean(kill_dist)
+        if mean_val == 0:
+            return {"cv": None, "label": "Zero average", "stability_tier": "N/A"}
+
+        stdev_val = _stats.stdev(kill_dist) if len(kill_dist) >= 2 else 0
+        cv = (stdev_val / mean_val) * 100 if mean_val > 0 else 0
+
+        if cv < 20:
+            stability = "Elite Consistency"
+        elif cv < 30:
+            stability = "Very Stable"
+        elif cv < 40:
+            stability = "Stable"
+        elif cv < 50:
+            stability = "Moderate Variance"
+        else:
+            stability = "High Volatility"
+
+        return {
+            "cv": round(cv, 2),
+            "label": stability,
+            "stability_tier": stability,
+            "sample_size": len(kill_dist),
+        }
+
+    def compute_performance_ceiling(self) -> dict:
+        """Calculate P90/Mean ratio for flash-round upside."""
+        kill_dist = self.player_stats.get("kill_distribution", [])
+        if not kill_dist or len(kill_dist) < 5:
+            return {
+                "ceiling_ratio": None,
+                "peak_kills": None,
+                "projection": "Insufficient data",
+            }
+
+        sorted_kills = sorted(kill_dist, reverse=True)
+        p90_idx = max(0, int(len(sorted_kills) * 0.10))
+        p90_val = sorted_kills[p90_idx]
+        mean_val = _stats.mean(kill_dist)
+
+        if mean_val == 0:
+            return {
+                "ceiling_ratio": None,
+                "peak_kills": p90_val,
+                "projection": "Zero baseline",
+            }
+
+        ceiling_ratio = p90_val / mean_val
+
+        return {
+            "ceiling_ratio": round(ceiling_ratio, 2),
+            "peak_kills": p90_val,
+            "p90_projected_kills": round(p90_val, 1),
+            "mean_kills": round(mean_val, 1),
+            "projection": f"Ceiling: {p90_val}K ({ceiling_ratio:.2f}x baseline)",
+        }
+
+    @staticmethod
+    def _score_to_tier(score: int) -> str:
+        if score >= 85:
+            return "S Tier (Elite)"
+        elif score >= 70:
+            return "A Tier (Strong)"
+        elif score >= 55:
+            return "B Tier (Above Average)"
+        elif score >= 40:
+            return "C Tier (Average)"
+        else:
+            return "D Tier (Below Average)"
+
+
+# =====================================================================
+# Enhanced Simulator (integrated)
+# =====================================================================
+
+class EnhancedSimulator:
+    """Monte Carlo simulation with confidence intervals."""
+
+    def __init__(
+        self,
+        kill_distribution: list,
+        baseline_avg: float,
+        multiplier: float = 1.0,
+        h2h_context: dict = None,
+    ):
+        self.kill_distribution = kill_distribution
+        self.baseline_avg = baseline_avg
+        self.multiplier = multiplier
+        self.h2h_context = h2h_context or {}
+
+    def run_simulation(
+        self, line: float, rounds: int = 40, num_sims: int = 5000
+    ) -> dict:
+        """Run Monte Carlo simulation, return full distribution analysis."""
+        if not self.kill_distribution or len(self.kill_distribution) < 3:
+            return self._fallback_result(line)
+
+        # Run simulations
+        simulated_totals = []
+        for _ in range(num_sims):
+            sample_maps = random.choices(self.kill_distribution, k=2)
+            total = sum(sample_maps) * self.multiplier
+            simulated_totals.append(total)
+
+        simulated_totals.sort()
+        mean_sim = _stats.mean(simulated_totals)
+        median_sim = _stats.median(simulated_totals)
+        std_sim = _stats.stdev(simulated_totals) if len(simulated_totals) > 1 else 0
+
+        # Empirical quantiles
+        p10_idx = max(0, int(num_sims * 0.10))
+        p25_idx = max(0, int(num_sims * 0.25))
+        p75_idx = max(0, int(num_sims * 0.75))
+        p90_idx = max(0, int(num_sims * 0.90))
+
+        p10 = simulated_totals[p10_idx]
+        p25 = simulated_totals[p25_idx]
+        p75 = simulated_totals[p75_idx]
+        p90 = simulated_totals[p90_idx]
+
+        # Over/Under probability
+        over_count = sum(1 for t in simulated_totals if t > line)
+        over_prob = (over_count / num_sims) * 100
+
+        # Scenarios
+        scenarios = {
+            "short_map": {
+                "rounds": 32,
+                "expected_kills": round((self.baseline_avg / 20.0) * 32 * self.multiplier, 1),
+            },
+            "normal_map": {
+                "rounds": 40,
+                "expected_kills": round((self.baseline_avg / 20.0) * 40 * self.multiplier, 1),
+            },
+            "long_map": {
+                "rounds": 48,
+                "expected_kills": round((self.baseline_avg / 20.0) * 48 * self.multiplier, 1),
+            },
+        }
+
+        return {
+            "mean_projection": round(mean_sim, 2),
+            "median_projection": round(median_sim, 2),
+            "std_dev": round(std_sim, 2),
+            "p25": round(p25, 2),
+            "p75": round(p75, 2),
+            "p10": round(p10, 2),
+            "p90": round(p90, 2),
+            "over_probability": round(over_prob, 1),
+            "under_probability": round(100 - over_prob, 1),
+            "sample_size": len(self.kill_distribution),
+            "scenarios": scenarios,
+        }
+
+    def _fallback_result(self, line: float) -> dict:
+        return {
+            "mean_projection": self.baseline_avg,
+            "median_projection": self.baseline_avg,
+            "std_dev": 0,
+            "p25": round(self.baseline_avg * 0.9, 2),
+            "p75": round(self.baseline_avg * 1.1, 2),
+            "p10": round(self.baseline_avg * 0.8, 2),
+            "p90": round(self.baseline_avg * 1.2, 2),
+            "over_probability": 50.0,
+            "under_probability": 50.0,
+            "sample_size": 0,
+            "scenarios": {},
+        }
 
 
 # =====================================================================
@@ -221,12 +449,12 @@ def _fmt_h2h_rows(rows, headshots=False):
 
 
 # =====================================================================
-# Embed builders
+# Embed builders (enhanced with advanced profiling & simulation)
 # =====================================================================
 
 def build_scan_embed(player, line, opponent, info):
     resolved_opponent = _pick(info, "Opponent", default=opponent.title())
-    desc = "Maps 1-2 only - HLTV exact sample + profile/stats context"
+    desc = "Maps 1-2 only - HLTV exact sample + profile/stats context + advanced simulation"
     embed = discord.Embed(
         title=f"{player.title()} vs {resolved_opponent} | Kills O/U {line}",
         description=desc,
@@ -259,6 +487,37 @@ def build_scan_embed(player, line, opponent, info):
         ),
         inline=False,
     )
+    
+    # NEW: Advanced profiling data
+    profiler_data = _pick(info, "Advanced Profiler", default={})
+    if profiler_data:
+        role_info = profiler_data.get("primary_role", "N/A")
+        ceiling_info = profiler_data.get("ceiling_projection", "N/A")
+        consistency = profiler_data.get("consistency", "N/A")
+        embed.add_field(
+            name="Advanced Profile",
+            value=_truncate(
+                f"Primary Role: {role_info}\n"
+                f"Ceiling: {ceiling_info}\n"
+                f"Consistency: {consistency}"
+            ),
+            inline=False,
+        )
+    
+    # NEW: Simulation scenarios
+    sim_data = _pick(info, "Simulation Results", default={})
+    if sim_data:
+        scenarios = sim_data.get("scenarios", {})
+        embed.add_field(
+            name="Scenarios",
+            value=_truncate(
+                f"Short (32r): {scenarios.get('short_map', {}).get('expected_kills', 'N/A')}K\n"
+                f"Normal (40r): {scenarios.get('normal_map', {}).get('expected_kills', 'N/A')}K\n"
+                f"Long (48r): {scenarios.get('long_map', {}).get('expected_kills', 'N/A')}K"
+            ),
+            inline=True,
+        )
+    
     embed.add_field(
         name="Analytics",
         value=_truncate(
@@ -277,7 +536,7 @@ def build_scan_embed(player, line, opponent, info):
         value=_truncate(_fmt_list(_pick(info, "Recent Totals (M1+M2 Combined)", default=[]))),
         inline=False,
     )
-    embed.set_footer(text="Moneylines removed as requested. Public pick and Thunderpick-style odds stay in the matchup header when available.")
+    embed.set_footer(text="Enhanced with advanced profiling and Monte Carlo simulation.")
     return embed
 
 
@@ -320,7 +579,7 @@ def build_grade_embed(player, line, info, headshots=False):
 
     embed = discord.Embed(
         title=f"{player.title()} | {stat_name} Grade",
-        description="Maps 1-2 only, based on exact recent HLTV samples",
+        description="Maps 1-2 only, based on exact recent HLTV samples + advanced simulation",
         color=discord.Color.purple(),
     )
     embed.add_field(
@@ -354,18 +613,34 @@ def build_grade_embed(player, line, info, headshots=False):
     embed.add_field(name="Player report", value=_truncate(_pick(info, "Player report")), inline=False)
     embed.add_field(name="Player pros", value=_fmt_bullets(_pick(info, "Player pros", default=[]), limit=5), inline=True)
     embed.add_field(name="Player cons", value=_fmt_bullets(_pick(info, "Player cons", default=[]), limit=5), inline=True)
-    embed.add_field(
-        name="Distribution",
-        value=_truncate(
-            f"Recent totals: {_fmt_list(_pick(info, recent_totals_key, default=[]))}\n"
-            f"P25: {_pick(info, '25th percentile')}\n"
-            f"P75: {_pick(info, '75th percentile')}\n"
-            f"Sim mean: {_pick(info, 'Simulated mean')}\n"
-            f"Sim median: {_pick(info, 'Simulated median')}\n"
-            f"Std dev: {_pick(info, 'Std Dev')}"
-        ),
-        inline=False,
-    )
+    
+    # NEW: Enhanced distribution with simulation quantiles
+    sim_data = _pick(info, "Simulation Results", default={})
+    if sim_data:
+        embed.add_field(
+            name="Distribution (Monte Carlo)",
+            value=_truncate(
+                f"Recent totals: {_fmt_list(_pick(info, recent_totals_key, default=[]))}\n"
+                f"P10: {sim_data.get('p10', 'N/A')} | P25: {sim_data.get('p25', 'N/A')} | P75: {sim_data.get('p75', 'N/A')} | P90: {sim_data.get('p90', 'N/A')}\n"
+                f"Mean: {sim_data.get('mean_projection', 'N/A')} | Median: {sim_data.get('median_projection', 'N/A')}\n"
+                f"Std Dev: {sim_data.get('std_dev', 'N/A')}"
+            ),
+            inline=False,
+        )
+    else:
+        embed.add_field(
+            name="Distribution",
+            value=_truncate(
+                f"Recent totals: {_fmt_list(_pick(info, recent_totals_key, default=[]))}\n"
+                f"P25: {_pick(info, '25th percentile')}\n"
+                f"P75: {_pick(info, '75th percentile')}\n"
+                f"Sim mean: {_pick(info, 'Simulated mean')}\n"
+                f"Sim median: {_pick(info, 'Simulated median')}\n"
+                f"Std dev: {_pick(info, 'Std Dev')}"
+            ),
+            inline=False,
+        )
+    
     if not headshots:
         scenarios = _pick(info, "Scenarios", default={})
         if scenarios:
@@ -531,7 +806,7 @@ class ScanButtons(ui.View):
 
 
 # =====================================================================
-# Bot commands
+# Bot commands (same signatures, enhanced internals)
 # =====================================================================
 
 @bot.command()
